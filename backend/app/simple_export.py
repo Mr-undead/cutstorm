@@ -8,6 +8,11 @@ Three-way dispatch lives in `main.api_export`:
 - `run_filter_only` — canvas and/or trim but no overlay text. Still
   re-encodes video, but skips Chromium entirely.
 - Full renderer lives in `renderer.render_export` (case C).
+
+Both fast paths stream ffmpeg's `-progress pipe:1` output so the caller's
+`on_progress` callback gets a real 0→99 ramp (then 100 on success). Pass
+`total_duration` (the expected output length, in seconds) to enable it;
+without it the callback only fires once with 100 at the end.
 """
 from __future__ import annotations
 
@@ -26,17 +31,19 @@ def run_stream_copy(
     source: Path,
     out: Path,
     on_progress: Optional[ProgressCb] = None,
+    total_duration: float | None = None,
 ) -> None:
     """Case A: canvas=source, no trim, no overlay, not audio-only."""
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg", "-y", "-nostats", "-loglevel", "error",
+        "-progress", "pipe:1", "-stats_period", "0.2",
         "-i", str(source),
         "-c", "copy",
         str(out),
     ]
     log.info("simple_export.stream_copy cmd=%s", " ".join(cmd))
-    _run(cmd)
+    _run(cmd, total_duration=total_duration, on_progress=on_progress)
     if on_progress is not None:
         on_progress(100)
 
@@ -57,6 +64,7 @@ def run_filter_only(
     watermark_path: Path | None = None,
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
+    total_duration: float | None = None,
     fps: int = 30,
 ) -> None:
     """Case B: canvas transform and/or trim, but no subtitle overlay.
@@ -69,6 +77,8 @@ def run_filter_only(
     `loop_total_duration` (Coub-mode) extends the trimmed slice to that total
     by repeating both the video and the source-audio buffers via the `loop`
     /`aloop` filters; extra audio rides the master timeline as-is.
+    `total_duration` is the expected output length (seconds) used to turn
+    ffmpeg's `-progress` stream into a 0→99 percent ramp.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     pre = f"select='{select_expr}',setpts=N/FRAME_RATE/TB," if select_expr else ""
@@ -166,7 +176,8 @@ def run_filter_only(
         # No source audio and no extra — produce a silent MP4.
         audio_map = ["-an"]
 
-    cmd = ["ffmpeg", "-y", "-nostats", "-loglevel", "error"]
+    cmd = ["ffmpeg", "-y", "-nostats", "-loglevel", "error",
+           "-progress", "pipe:1", "-stats_period", "0.2"]
     # Apply trim to the source input (and extra input) via input-seek.
     if trim_in > 0.0:
         cmd += ["-ss", f"{trim_in:.3f}"]
@@ -199,15 +210,65 @@ def run_filter_only(
         cmd += ["-shortest"]
     cmd += [str(out)]
     log.info("simple_export.filter_only cmd=%s", " ".join(cmd))
-    _run(cmd)
+    _run(cmd, total_duration=total_duration, on_progress=on_progress)
     if on_progress is not None:
         on_progress(100)
 
 
-def _run(cmd: list[str]) -> None:
+def _drain_progress(
+    stream,
+    total_duration: float,
+    on_progress: ProgressCb,
+) -> None:
+    """Turn ffmpeg's `-progress pipe:1` lines into a monotonic 0–99 ramp.
+
+    ffmpeg writes `out_time_us=` / `out_time_ms=` (both in microseconds) on
+    every stats tick and `progress=end` when the muxer is done. Percent is
+    capped at 99 here; the caller reports the final 100 once ffmpeg exits
+    successfully, mirroring the renderer path (`renderer._capture_frames`).
+    """
+    last = -1
+    for raw in stream:
+        line = raw.strip()
+        if not (line.startswith("out_time_us=") or line.startswith("out_time_ms=")):
+            continue
+        try:
+            us = int(line.split("=", 1)[1])
+        except ValueError:
+            continue
+        if us < 0:
+            continue
+        pct = max(0, min(99, int(us / 1_000_000 / total_duration * 100)))
+        if pct > last:
+            on_progress(pct)
+            last = pct
+
+
+def _run(
+    cmd: list[str],
+    total_duration: float | None = None,
+    on_progress: Optional[ProgressCb] = None,
+) -> None:
+    """Run ffmpeg, draining `-progress pipe:1` when duration + callback are known.
+
+    stderr still goes to a temporary file (never a PIPE) so ffmpeg can't
+    deadlock on a full pipe buffer; stdout is only piped when we actually
+    need the progress stream.
+    """
+    want_progress = (
+        on_progress is not None and total_duration is not None and total_duration > 0
+    )
     stderr_file = tempfile.TemporaryFile(mode="w+b")
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE if want_progress else subprocess.DEVNULL,
+            stderr=stderr_file,
+            text=want_progress,
+        )
+        if want_progress:
+            assert proc.stdout is not None and on_progress is not None
+            _drain_progress(proc.stdout, float(total_duration), on_progress)
         rc = proc.wait()
         stderr_file.seek(0)
         err = stderr_file.read().decode("utf-8", errors="replace")[-3000:]

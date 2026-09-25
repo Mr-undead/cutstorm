@@ -64,6 +64,12 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
         const clip = clipsToExport[i];
         const clipIndex = clip ? i + 1 : undefined;
 
+        // Each clip is rendered on its own timeline, so reset the bar to 0
+        // here: the backend pushes that clip's own 0→100 ramp over the WS,
+        // giving one full fill per clip (3 clips → 3 fills) instead of an
+        // aggregate that would snap the bar backwards after every clip.
+        setProgress("encode", 0);
+
         const jobId = newJobId();
         const ws = await openProgressWs(jobId);
 
@@ -116,11 +122,6 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
             a.click();
             setTimeout(() => a.remove(), 500);
           }
-
-          setProgress(
-            "encode",
-            Math.round(((i + 1) / clipsToExport.length) * 100),
-          );
         } finally {
           ws.close();
         }

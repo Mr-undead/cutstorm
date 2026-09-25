@@ -1435,6 +1435,7 @@ async def api_export(
                 try:
                     simple_export.run_stream_copy(
                         source=media, out=out, on_progress=on_progress,
+                        total_duration=new_duration,
                     )
                     return
                 except RuntimeError as exc:
@@ -1458,6 +1459,7 @@ async def api_export(
                 watermark_path=watermark_path,
                 source_has_audio=info.has_audio,
                 loop_total_duration=loop_total_duration,
+                total_duration=new_duration,
             )
             return
         log.info(
