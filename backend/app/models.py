@@ -197,6 +197,7 @@ class ExportRequest(BaseModel):
     style: Style
     position: Position
     size: Size
+    clip_index: int | None = Field(default=None, ge=1, le=999)
     trim_silences: bool = False
     silence_threshold_sec: float = Field(default=0.4, ge=0.05, le=5.0)
     silence_padding_sec: float = Field(default=0.08, ge=0.0, le=1.0)
@@ -219,6 +220,7 @@ class ExportResponse(BaseModel):
     video_id: str
     output_path: str
     output_format: ExportFormat = "mp4"
+    clip_index: int | None = None
     original_duration: float | None = None
     output_duration: float | None = None
     cuts: list[tuple[float, float]] | None = None

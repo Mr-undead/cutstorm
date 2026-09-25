@@ -38,3 +38,6 @@ project_contents.txt
 
 # Playwright / smoke test outputs — regenerated on every run.
 frontend/e2e/output/
+
+*.bak
+*.bak-*

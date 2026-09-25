@@ -17,6 +17,34 @@ function fmt(t: number): string {
   return `${m}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }
 
+function parseTime(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+
+  // Plain seconds, e.g. 15 or 15.5
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+
+  const parts = text.split(":");
+  if (parts.length < 2 || parts.length > 3) return null;
+
+  const numbers = parts.map(Number);
+  if (numbers.some((n) => !Number.isFinite(n) || n < 0)) return null;
+
+  if (parts.length === 2) {
+    const [minutes, seconds] = numbers;
+    if (seconds >= 60) return null;
+    return minutes * 60 + seconds;
+  }
+
+  const [hours, minutes, seconds] = numbers;
+  if (minutes >= 60 || seconds >= 60) return null;
+
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 const THUMB_COUNT = 40;
 const THUMB_WIDTH = 160;
 
@@ -28,6 +56,11 @@ export function Timeline() {
   const currentTime = useStore((s) => s.currentTime);
   const trimRange = useStore((s) => s.trimRange);
   const setTrimRange = useStore((s) => s.setTrimRange);
+  const clips = useStore((s) => s.clips);
+  const activeClipId = useStore((s) => s.activeClipId);
+  const addClip = useStore((s) => s.addClip);
+  const removeClip = useStore((s) => s.removeClip);
+  const selectClip = useStore((s) => s.selectClip);
   const audio = useStore((s) => s.audio);
   const setAudio = useStore((s) => s.setAudio);
   const setError = useStore((s) => s.setError);
@@ -56,6 +89,61 @@ export function Timeline() {
         thumbCount={THUMB_COUNT}
         onChange={(patch) => setTrimRange(patch)}
       />
+
+     <TrimTimeInputs
+       duration={duration}
+       inSec={inSec}
+       outSec={outSec}
+       onChange={(patch) => setTrimRange(patch)}
+      />
+
+            <div className="clips-panel" data-testid="clips-panel">
+        <div className="clips-header">
+          <span>Clips</span>
+          <button
+            type="button"
+            className="clips-add-button"
+            onClick={addClip}
+          >
+            + Add Clip
+          </button>
+        </div>
+
+        {clips.length > 0 && (
+          <div className="clips-list">
+            {clips.map((clip, index) => (
+              <div
+                key={clip.id}
+                className={`clip-row ${
+                  activeClipId === clip.id ? "active" : ""
+                }`}
+                onClick={() => selectClip(clip.id)}
+              >
+                <span className="clip-number">
+                  Clip {index + 1}
+                </span>
+
+                <span className="clip-range">
+                  {fmt(clip.in_sec)} → {fmt(clip.out_sec)}
+                </span>
+
+                <button
+                  type="button"
+                  className="clip-remove-button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeClip(clip.id);
+                  }}
+                  title="Remove clip"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="timeline-meta" data-testid="timeline-meta">
         <span>{fmt(inSec)}</span>
         <span style={{ opacity: 0.4 }}>—</span>
@@ -98,6 +186,121 @@ export function Timeline() {
         setError={setError}
         duration={duration}
       />
+    </div>
+  );
+}
+
+// ---------- Manual trim inputs ----------
+
+function TrimTimeInputs({
+  duration,
+  inSec,
+  outSec,
+  onChange,
+}: {
+  duration: number;
+  inSec: number;
+  outSec: number;
+  onChange: (patch: { in_sec?: number; out_sec?: number }) => void;
+}) {
+  const [startText, setStartText] = useState(fmt(inSec));
+  const [endText, setEndText] = useState(fmt(outSec));
+
+  useEffect(() => {
+    setStartText(fmt(inSec));
+  }, [inSec]);
+
+  useEffect(() => {
+    setEndText(fmt(outSec));
+  }, [outSec]);
+
+  function commitStart() {
+    const value = parseTime(startText);
+
+    if (value === null) {
+      setStartText(fmt(inSec));
+      return;
+    }
+
+    const next = Math.max(0, Math.min(duration, value));
+
+    if (next >= outSec) {
+      setStartText(fmt(inSec));
+      return;
+    }
+
+    onChange({ in_sec: next });
+  }
+
+  function commitEnd() {
+    const value = parseTime(endText);
+
+    if (value === null) {
+      setEndText(fmt(outSec));
+      return;
+    }
+
+    const next = Math.max(0, Math.min(duration, value));
+
+    if (next <= inSec) {
+      setEndText(fmt(outSec));
+      return;
+    }
+
+    onChange({ out_sec: next });
+  }
+
+  return (
+    <div className="trim-inputs" data-testid="trim-inputs">
+      <label className="trim-input-group">
+        <span>Start</span>
+        <input
+          type="text"
+          value={startText}
+          onChange={(e) => setStartText(e.target.value)}
+          onBlur={commitStart}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              setStartText(fmt(inSec));
+              e.currentTarget.blur();
+            }
+          }}
+          aria-label="Trim start time"
+          placeholder="0:00.00"
+          spellCheck={false}
+        />
+      </label>
+
+      <span className="trim-input-separator">→</span>
+
+      <label className="trim-input-group">
+        <span>End</span>
+        <input
+          type="text"
+          value={endText}
+          onChange={(e) => setEndText(e.target.value)}
+          onBlur={commitEnd}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              setEndText(fmt(outSec));
+              e.currentTarget.blur();
+            }
+          }}
+          aria-label="Trim end time"
+          placeholder="0:00.00"
+          spellCheck={false}
+        />
+      </label>
+
+      <span className="trim-duration">
+        {Math.max(0, outSec - inSec).toFixed(2)}s
+      </span>
     </div>
   );
 }

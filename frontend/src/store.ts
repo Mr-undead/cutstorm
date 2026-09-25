@@ -79,6 +79,12 @@ export type CanvasConfig = {
  * duration in both preview and export. */
 export type TrimRange = { in_sec: number; out_sec: number; loop: boolean };
 
+export type Clip = {
+  id: string;
+  in_sec: number;
+  out_sec: number;
+};
+
 /** Original + optional extra audio track mixed into export. */
 export type AudioConfig = {
   sourceVolume: number;        // 0.0..2.0, default 1.0
@@ -124,6 +130,8 @@ type State = {
   videoEl: HTMLMediaElement | null;
   trim: TrimConfig;
   trimRange: TrimRange;
+  clips: Clip[];
+  activeClipId: string | null;
   audio: AudioConfig;
   canvas: CanvasConfig;
   isAudioOnly: boolean;
@@ -189,6 +197,10 @@ type Actions = {
   setVideoEl: (el: HTMLMediaElement | null) => void;
   setTrim: (patch: Partial<TrimConfig>) => void;
   setTrimRange: (patch: Partial<TrimRange>) => void;
+  addClip: () => void;
+  updateClip: (id: string, patch: Partial<Clip>) => void;
+  removeClip: (id: string) => void;
+  selectClip: (id: string) => void;
   setAudio: (patch: Partial<AudioConfig>) => void;
   setCanvas: (patch: Partial<CanvasConfig>) => void;
   setCustomCrop: (patch: Partial<CustomCrop>) => void;
@@ -255,6 +267,8 @@ export const useStore = create<State & Actions>()(
       videoEl: null,
       trim: { enabled: false, threshold_sec: 0.4, padding_sec: 0.08 },
       trimRange: { in_sec: 0, out_sec: 0, loop: false },
+      clips: [],
+      activeClipId: null,
       audio: {
         sourceVolume: 1.0,
         extraAudioId: null,
@@ -294,6 +308,8 @@ export const useStore = create<State & Actions>()(
             isAudioOnly: isAudio,
             // A new upload represents a fresh edit: reset trim range and extra audio.
             trimRange: { in_sec: 0, out_sec: 0, loop: false },
+	    clips: [],
+            activeClipId: null,
             audio: {
               sourceVolume: 1.0,
               extraAudioId: null,
@@ -419,15 +435,137 @@ export const useStore = create<State & Actions>()(
       setCurrentTime: (t) => set({ currentTime: t }),
       setVideoEl: (el) => set({ videoEl: el }),
       setTrim: (patch) => set((s) => ({ trim: { ...s.trim, ...patch } })),
-      setTrimRange: (patch) => set((s) => {
+            setTrimRange: (patch) => set((s) => {
         const dur = s.duration || 0;
         const next: TrimRange = { ...s.trimRange, ...patch };
+
         // Clamp to [0, duration]. out_sec=0 stays as sentinel for "to end".
         next.in_sec = Math.max(0, Math.min(next.in_sec, Math.max(0, dur - 0.1)));
+
         if (next.out_sec > 0) {
-          next.out_sec = Math.max(next.in_sec + 0.1, Math.min(next.out_sec, dur));
+          next.out_sec = Math.max(
+            next.in_sec + 0.1,
+            Math.min(next.out_sec, dur)
+          );
         }
+
+        // Keep the selected clip synchronized with the active trim range.
+        if (s.activeClipId) {
+          const clips = s.clips.map((clip) =>
+            clip.id === s.activeClipId
+              ? {
+                  ...clip,
+                  in_sec: next.in_sec,
+                  out_sec: next.out_sec,
+                }
+              : clip
+          );
+
+          return {
+            trimRange: next,
+            clips,
+          };
+        }
+
         return { trimRange: next };
+      }),
+
+      addClip: () => set((s) => {
+        const inSec = s.trimRange.in_sec;
+        const outSec = s.trimRange.out_sec > 0
+          ? s.trimRange.out_sec
+          : s.duration;
+
+        if (outSec <= inSec) {
+          return {};
+        }
+
+        const clip: Clip = {
+          id: `clip-${Date.now()}-${s.clips.length}`,
+          in_sec: inSec,
+          out_sec: outSec,
+        };
+
+        return {
+          clips: [...s.clips, clip],
+          activeClipId: clip.id,
+        };
+      }),
+
+      updateClip: (id, patch) => set((s) => {
+        const clips = s.clips.map((clip) =>
+          clip.id === id
+            ? { ...clip, ...patch }
+            : clip
+        );
+
+        const updated = clips.find((clip) => clip.id === id);
+
+        if (!updated) {
+          return { clips };
+        }
+
+        if (s.activeClipId === id) {
+          return {
+            clips,
+            trimRange: {
+              ...s.trimRange,
+              in_sec: updated.in_sec,
+              out_sec: updated.out_sec,
+            },
+          };
+        }
+
+        return { clips };
+      }),
+
+      removeClip: (id) => set((s) => {
+        const clips = s.clips.filter((clip) => clip.id !== id);
+
+        if (s.activeClipId !== id) {
+          return { clips };
+        }
+
+        if (clips.length === 0) {
+          return {
+            clips,
+            activeClipId: null,
+            trimRange: {
+              in_sec: 0,
+              out_sec: 0,
+              loop: false,
+            },
+          };
+        }
+
+        const nextClip = clips[clips.length - 1];
+
+        return {
+          clips,
+          activeClipId: nextClip.id,
+          trimRange: {
+            ...s.trimRange,
+            in_sec: nextClip.in_sec,
+            out_sec: nextClip.out_sec,
+          },
+        };
+      }),
+
+      selectClip: (id) => set((s) => {
+        const clip = s.clips.find((c) => c.id === id);
+
+        if (!clip) {
+          return {};
+        }
+
+        return {
+          activeClipId: id,
+          trimRange: {
+            ...s.trimRange,
+            in_sec: clip.in_sec,
+            out_sec: clip.out_sec,
+          },
+        };
       }),
       setAudio: (patch) => set((s) => ({ audio: { ...s.audio, ...patch } })),
       setCanvas: (patch) => set((s) => ({ canvas: { ...s.canvas, ...patch } })),
@@ -553,6 +691,8 @@ export const useStore = create<State & Actions>()(
           jobId: null,
           watermark: true,
           trimRange: { in_sec: 0, out_sec: 0, loop: false },
+          clips: [],
+          activeClipId: null,
           audio: {
             sourceVolume: 1.0,
             extraAudioId: null,
@@ -583,7 +723,9 @@ export const useStore = create<State & Actions>()(
         size: s.size,
         trim: s.trim,
         trimRange: s.trimRange,
-        audio: s.audio,
+	clips: s.clips,
+	activeClipId: s.activeClipId,
+	audio: s.audio,
         canvas: s.canvas,
         isAudioOnly: s.isAudioOnly,
         generateSubs: s.generateSubs,
@@ -592,7 +734,7 @@ export const useStore = create<State & Actions>()(
         subsStreaming: s.subsStreaming,
         jobId: s.jobId,
       }),
-        version: 8,
+        version: 9,
         // Historical fields migrate forward:
         //   v1→v2: `canvas` gained mode/crop_anchor/custom (Feature 1).
         //   v2→v3: `trimRange` added (Feature Trim in/out).
@@ -660,6 +802,12 @@ export const useStore = create<State & Actions>()(
             p.segmentsExtra = (p.segmentsExtra as unknown) ?? [];
             p.subtitleTrack = (p.subtitleTrack as unknown) ?? "source";
           }
+          if (version < 9) {
+            // v8→v9: multiple manual clips.
+            p.clips = Array.isArray(p.clips) ? p.clips : [];
+            p.activeClipId =
+              typeof p.activeClipId === "string" ? p.activeClipId : null;
+          }
           return p;
         },
       },
@@ -675,6 +823,8 @@ export const useStore = create<State & Actions>()(
         size: s.size,
         trim: s.trim,
         trimRange: s.trimRange,
+        clips: s.clips,
+        activeClipId: s.activeClipId,
         audio: s.audio,
         canvas: s.canvas,
       }),
