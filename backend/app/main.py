@@ -10,7 +10,6 @@ import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +36,6 @@ from .models import (
     ExportRequest,
     ExportResponse,
     ExtraAudioResponse,
-    FetchUrlRequest,
     Segment,
     TranscribeResponse,
     TranscriptSummary,
@@ -53,7 +51,6 @@ STATIC_DIR = Path(os.environ.get("STATIC_DIR", "/app/static"))
 FONTS_DIR = Path(os.environ.get("FONTS_DIR", "/usr/share/fonts/cutstorm"))
 FONTS_MANIFEST = Path(os.environ.get("FONTS_MANIFEST", "/opt/cutstorm/fonts-src/manifest.json"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024**3)))
-MAX_FETCH_SEC = int(os.environ.get("MAX_FETCH_SEC", "900"))
 
 for d in (UPLOADS_DIR, OUTPUTS_DIR, MODELS_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -558,7 +555,7 @@ def _finalize_uploaded_media(
     generate_subs: bool,
     jid: str | None,
 ) -> TranscribeResponse:
-    """Shared post-ingest flow for both file-upload and URL-import paths.
+    """Shared post-ingest flow for uploaded media files.
 
     Takes a downloaded/uploaded temp file, hashes it into a video_id, dedups
     against existing media, returns cached TranscribeResponse on hit, else
@@ -694,279 +691,6 @@ async def api_transcribe(
         generate_subs=generate_subs,
         jid=jid,
     )
-
-
-try:
-    import yt_dlp as _yt_dlp  # type: ignore
-except Exception:  # pragma: no cover — container always has it; tests monkeypatch
-    _yt_dlp = None
-
-
-# In-flight URL downloads keyed by job_id. Each entry is a threading.Event
-# the yt-dlp progress_hook consults every tick; set it to interrupt the
-# download cleanly.
-import threading as _threading
-_fetch_cancel_events: dict[str, _threading.Event] = {}
-
-
-def _safe_external_url(url: str) -> bool:
-    """SSRF guard: only allow http(s) against public hostnames."""
-    try:
-        p = urlparse(url)
-    except Exception:
-        return False
-    if p.scheme not in ("http", "https"):
-        return False
-    host = (p.hostname or "").lower()
-    if not host:
-        return False
-    if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
-        return False
-    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("169.254."):
-        return False
-    if host.startswith("172."):
-        parts = host.split(".")
-        if len(parts) >= 2:
-            try:
-                n = int(parts[1])
-            except ValueError:
-                n = -1
-            if 16 <= n <= 31:
-                return False
-    if host.startswith("fe80:") or host == "::":
-        return False
-    return True
-
-
-class _FetchError(Exception):
-    def __init__(self, status: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status = status
-        self.detail = detail
-
-
-def _classify_ytdlp_error(msg: str) -> tuple[int, str]:
-    """Map a raw yt-dlp error string to an HTTP status + short human message.
-
-    yt-dlp's error text is noisy and technical. The UI surfaces whatever we
-    return in `detail` directly in the toast, so we want something a person
-    can act on (retry, try another URL, etc). Order matters — more-specific
-    signatures go first."""
-    m = msg.lower() if msg else ""
-    if "sign in to confirm your age" in m or "age-restricted" in m or "age restricted" in m:
-        return 403, "This video is age-restricted and is not supported."
-    if "private video" in m or "video is private" in m:
-        return 403, "This video is private and cannot be downloaded."
-    if "members-only" in m or "members only" in m:
-        return 403, "Members-only content is not supported."
-    if "removed by the uploader" in m or "has been removed" in m or "video unavailable" in m:
-        return 404, "Video unavailable or removed."
-    if "unsupported url" in m or "no video formats" in m:
-        return 415, "This URL is not supported."
-    if "http error 429" in m or "too many requests" in m:
-        return 429, "Rate-limited by source. Try again in a few minutes."
-    if (
-        "network is unreachable" in m
-        or "failed to resolve" in m
-        or "connection timed out" in m
-        or "name or service not known" in m
-    ):
-        return 502, "Could not reach the source. Check your connection."
-    if "http error 403" in m:
-        return 502, "Source refused the download (403)."
-    if "http error 404" in m:
-        return 404, "Video not found (404)."
-    first_line = (msg or "").splitlines()[0] if msg else "download failed"
-    return 502, f"Download failed: {first_line}"
-
-
-def _url_cache_entry(url: str) -> Path:
-    d = UPLOADS_DIR / "url_cache"
-    d.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return d / f"{key}.json"
-
-
-def _download_with_ytdlp(
-    url: str,
-    out_template: str,
-    jid: str | None,
-    cancel_event: _threading.Event | None = None,
-) -> Path:
-    """Runs inside a worker thread. Preflights duration/live, then downloads.
-    Returns the final file path. If `cancel_event` is set mid-download the
-    progress_hook raises a DownloadError and yt-dlp cleans up partial files."""
-    if _yt_dlp is None:
-        raise _FetchError(500, "yt-dlp is not installed")
-
-    def _hook(d: dict) -> None:
-        if cancel_event is not None and cancel_event.is_set():
-            raise _yt_dlp.utils.DownloadError("cancelled by user")
-        try:
-            status = d.get("status")
-            if status == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                done = d.get("downloaded_bytes") or 0
-                pct = int(done / total * 100) if total else 0
-                ws.push(jid, {"phase": "download", "percent": min(99, max(0, pct))})
-            elif status == "finished":
-                ws.push(jid, {"phase": "download_done", "percent": 100})
-        except Exception:
-            pass
-
-    opts = {
-        "outtmpl": out_template,
-        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "restrictfilenames": True,
-        "progress_hooks": [_hook],
-    }
-    with _yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if info.get("is_live"):
-            raise _FetchError(400, "live streams not supported in first iteration")
-        dur = info.get("duration") or 0
-        if dur and dur > MAX_FETCH_SEC:
-            raise _FetchError(413, f"video exceeds MAX_FETCH_SEC={MAX_FETCH_SEC}s limit")
-        info = ydl.extract_info(url, download=True)
-        if "requested_downloads" in info and info["requested_downloads"]:
-            return Path(info["requested_downloads"][0]["filepath"])
-        return Path(ydl.prepare_filename(info))
-
-
-def _remux_to_mp4(src: Path) -> Path:
-    """If src isn't already mp4, remux-copy into a sibling .mp4. Falls back to
-    re-encode only when no mp4-compatible streams exist."""
-    if src.suffix.lower() == ".mp4":
-        return src
-    dst = src.with_suffix(".mp4")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src), "-c", "copy",
-             "-movflags", "+faststart", str(dst)],
-            check=True, capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src),
-             "-c:v", "libx264", "-c:a", "aac",
-             "-movflags", "+faststart", str(dst)],
-            check=True, capture_output=True,
-        )
-    src.unlink(missing_ok=True)
-    return dst
-
-
-@app.post("/api/fetch-url", response_model=TranscribeResponse)
-async def api_fetch_url(
-    req: FetchUrlRequest,
-    job_id: str | None = Query(default=None),
-    x_job_id: str | None = Header(default=None),
-) -> TranscribeResponse:
-    """Download a video by URL via yt-dlp, then run the same post-ingest flow
-    as /api/transcribe."""
-    jid = job_id or x_job_id
-    url = req.url.strip()
-    log.info(
-        "fetch_url.request url=%s generate_subs=%s job_id=%s", url, req.generate_subs, jid,
-    )
-
-    if not _safe_external_url(url):
-        raise HTTPException(status_code=400, detail="invalid url")
-
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
-    cache_entry = _url_cache_entry(url)
-    if cache_entry.exists():
-        try:
-            data = json.loads(cache_entry.read_text())
-            cached_id = data.get("video_id")
-        except Exception:
-            cached_id = None
-        if cached_id and _find_media_file(cached_id) is not None:
-            meta_file = _meta_path(cached_id)
-            cache_key = json.dumps({"model": req.model, "language": req.language}, sort_keys=True)
-            if meta_file.exists():
-                meta = json.loads(meta_file.read_text())
-                if meta.get("_cache_key") == cache_key:
-                    meta.pop("_cache_key", None)
-                    log.info("fetch_url.cache_hit url=%s video_id=%s", url, cached_id)
-                    return TranscribeResponse(**meta)
-
-    stem = f".incoming-url-{os.getpid()}-{int(time.time() * 1000)}"
-    out_template = str(UPLOADS_DIR / f"{stem}.%(ext)s")
-
-    cancel_event = _threading.Event()
-    if jid:
-        _fetch_cancel_events[jid] = cancel_event
-    try:
-        dl_path = await asyncio.to_thread(
-            _download_with_ytdlp, url, out_template, jid, cancel_event,
-        )
-    except _FetchError as exc:
-        ws.push(jid, {"phase": "download_error", "error": exc.detail})
-        raise HTTPException(status_code=exc.status, detail=exc.detail)
-    except Exception as exc:
-        raw = str(exc) or exc.__class__.__name__
-        # Treat user cancellation as a client request, not a server error.
-        if cancel_event.is_set() or "cancelled by user" in raw.lower():
-            if jid:
-                _fetch_cancel_events.pop(jid, None)
-            raise HTTPException(status_code=499, detail="download cancelled")
-        status, detail = _classify_ytdlp_error(raw)
-        log.warning("fetch_url.download_failed url=%s status=%d raw=%s", url, status, raw.splitlines()[0] if raw else "")
-        ws.push(jid, {"phase": "download_error", "error": detail})
-        raise HTTPException(status_code=status, detail=detail)
-    finally:
-        if jid:
-            _fetch_cancel_events.pop(jid, None)
-
-    if not dl_path.exists():
-        raise HTTPException(status_code=502, detail="download produced no file")
-
-    try:
-        dl_path = await asyncio.to_thread(_remux_to_mp4, dl_path)
-    except subprocess.CalledProcessError as exc:
-        dl_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=502, detail=f"remux failed: {exc}")
-
-    try:
-        info = probe(dl_path)
-    except Exception as exc:
-        dl_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=502, detail=f"probe failed: {exc}")
-    if info.duration > MAX_FETCH_SEC + 1:
-        dl_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=413,
-            detail=f"video exceeds MAX_FETCH_SEC={MAX_FETCH_SEC}s limit",
-        )
-
-    try:
-        host = urlparse(url).hostname or "url"
-    except Exception:
-        host = "url"
-    filename = f"{host}.mp4"
-
-    resp = _finalize_uploaded_media(
-        tmp_path=dl_path,
-        ext="mp4",
-        filename=filename,
-        language=req.language,
-        model=req.model,
-        generate_subs=req.generate_subs,
-        jid=jid,
-    )
-
-    try:
-        cache_entry.write_text(json.dumps({"url": url, "video_id": resp.video_id}))
-    except Exception:
-        pass
-
-    return resp
 
 
 @app.get("/api/transcripts", response_model=list[TranscriptSummary])
@@ -1184,19 +908,6 @@ def storage_info() -> dict:
 def storage_sweep_now() -> dict:
     """Run the orphan + stale sweep immediately and return the counts."""
     return _sweep_orphans()
-
-
-@app.post("/api/fetch-url/{job_id}/cancel")
-def cancel_fetch_url(job_id: str) -> dict:
-    """Signal the yt-dlp progress_hook for this job to bail out. The download
-    thread sees the event on its next tick (usually sub-second) and exits
-    cleanly. Partial files inside UPLOADS_DIR are removed by yt-dlp itself."""
-    event = _fetch_cancel_events.get(job_id)
-    if event is None:
-        return {"ok": True, "cancelled": False}
-    event.set()
-    log.info("fetch_url.cancel job_id=%s", job_id)
-    return {"ok": True, "cancelled": True}
 
 
 @app.post("/api/transcribe/{video_id}/cancel")

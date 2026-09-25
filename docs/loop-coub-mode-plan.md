@@ -84,7 +84,7 @@
 | Файл | Что там |
 |------|---------|
 | [backend/tests/](../backend/tests) | pytest: `test_main.py`, `test_export_dispatch.py`, `test_trim_and_audio.py`, `test_transcribe.py`, `test_gif_export.py`, и т.д. |
-| [frontend/e2e/](../frontend/e2e) | Playwright: `01-upload.spec.ts` … `12-url-import.spec.ts` |
+| [frontend/e2e/](../frontend/e2e) | Playwright: `01-upload.spec.ts` … `13-loop-mode.spec.ts` |
 | [frontend/e2e/_helpers.ts](../frontend/e2e/_helpers.ts) | `uploadEnglish`, `SAMPLE_5S`, `SAMPLE_LONG` |
 | [frontend/e2e/11-trim-and-audio.spec.ts](../frontend/e2e/11-trim-and-audio.spec.ts) | Шаблон для нашего нового теста |
 | [frontend/playwright.config.ts](../frontend/playwright.config.ts) | base URL `http://localhost:8000` |

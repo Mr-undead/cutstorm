@@ -68,13 +68,6 @@ class TranscribeResponse(BaseModel):
     project: "ProjectState | None" = None
 
 
-class FetchUrlRequest(BaseModel):
-    url: str = Field(..., min_length=1, max_length=2048)
-    language: str | None = "ru"
-    model: str | None = None
-    generate_subs: bool = True
-
-
 class TranscriptSummary(BaseModel):
     video_id: str
     original_filename: str | None = None

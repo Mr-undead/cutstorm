@@ -18,19 +18,15 @@ Self-hosted video editor for quickly turning a raw video into a finished clip wi
 
 ## About
 
-Cut/Storm is a browser-based video editor focused on short-video workflows. You can drop a video file or paste a URL, trim the clip, change the aspect ratio or crop it, mix in an additional audio track, auto-remove silences, and export a finished MP4. Built into the same pipeline is Whisper-based automatic subtitling with a visual editor for the transcript and caption styles; when you export, ffmpeg burns the subtitles into the video.
+Cut/Storm is a browser-based video editor focused on short-video workflows. You can drop a video file, trim the clip, change the aspect ratio or crop it, mix in an additional audio track, auto-remove silences, and export a finished MP4. Built into the same pipeline is Whisper-based automatic subtitling with a visual editor for the transcript and caption styles; when you export, ffmpeg burns the subtitles into the video.
 
-Everything — URL download, Whisper transcription, subtitle rendering, ffmpeg encoding — runs inside one Docker container on the host machine. No external APIs are called, no account is required, source material never leaves the machine. All project files live under `./data/` and persist across container rebuilds.
+Everything — Whisper transcription, subtitle rendering, ffmpeg encoding — runs inside one Docker container on the host machine. No external APIs are called, no account is required, source material never leaves the machine. All project files live under `./data/` and persist across container rebuilds.
 
 ## What you can do with Cut/Storm:
 
 - [x] **Import a video**
     - [x] Drop a file (MP4, MOV, MKV, WebM, AVI, MP3, WAV, M4A, OGG, FLAC, AAC)
-    - [x] Paste a URL (YouTube, X/Twitter, Vimeo, TikTok and anything else yt-dlp supports)
     - [x] Re-upload same file, skip re-processing (content-hash cache)
-    - [x] Re-import same URL, skip re-download
-    - [ ] Batch URL import
-    - [ ] Cookies for age-gated / private content
 - [x] **Transcribe locally**
     - [x] Whisper + WhisperX with word-level alignment
     - [x] Pick model per-upload (tiny / small / large-v3)
@@ -97,7 +93,6 @@ Environment variables (see `docker-compose.yml`):
 | `WHISPER_COMPUTE`     | `int8`       | CTranslate2 compute type (`int8`, `int8_float16`, `float16`).   |
 | `WHISPER_DEVICE`      | `cpu`        | `cpu` or `cuda`. CUDA needs nvidia-container-toolkit on host.   |
 | `WHISPERX_SKIP_ALIGN` | `0`          | `1` skips wav2vec2 alignment (faster, coarser word timing).     |
-| `MAX_FETCH_SEC`       | `900`        | Max duration for URL import. Longer → 413.                       |
 | `MAX_UPLOAD_BYTES`    | `2147483648` | Max upload size (2 GB default).                                 |
 
 Data layout:
@@ -114,12 +109,12 @@ All three are volume-mounted and persist across container rebuilds.
 ## Architecture
 
 One container, two parts:
-- FastAPI backend in `backend/app/` — upload, yt-dlp, Whisper, ffmpeg, WebSocket progress
+- FastAPI backend in `backend/app/` — upload, Whisper, ffmpeg, WebSocket progress
 - React + Vite frontend in `frontend/src/` — Zustand state, live preview, drag/resize UI
 
 Subtitle rendering goes through headless Chromium: each frame's overlay is rendered by Playwright, ffmpeg composites it onto the source video. The preview and the export use the same renderer, so what you see in the browser is what you get in the MP4.
 
-Progress flows over `/ws/progress/{job_id}`. Long operations (download, transcribe, encode) push `{phase, percent}` messages; the frontend drives the progress bar from them. Transcription state is persisted to `meta.json` incrementally, so a page reload mid-run can reconnect to the same job and catch up on any missed segments.
+Progress flows over `/ws/progress/{job_id}`. Long operations (transcribe, encode) push `{phase, percent}` messages; the frontend drives the progress bar from them. Transcription state is persisted to `meta.json` incrementally, so a page reload mid-run can reconnect to the same job and catch up on any missed segments.
 
 ## FAQ
 
@@ -142,7 +137,7 @@ It pulls the base image, installs ffmpeg, downloads Playwright's Chromium (~200 
 Yes. Set `WHISPER_DEVICE=cuda` in `docker-compose.yml` and run `docker compose --gpus all up`. You need [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/) on the host.
 
 **Can I expose this on my LAN / internet?**
-You can, but there's no auth built in. Put a reverse proxy (Caddy, Traefik) with basic auth in front. Also add a rate limit on `/api/fetch-url` so randos can't use your machine as a free downloader.
+You can, but there's no auth built in. Put a reverse proxy (Caddy, Traefik) with basic auth in front.
 
 ## Contributing
 
@@ -160,11 +155,10 @@ cd frontend && npx playwright test
 
 ## License
 
-MIT. For personal editing; respect each platform's Terms of Service when importing from a URL.
+MIT. For personal editing.
 
 ## Credits
 
 - [OpenAI Whisper](https://github.com/openai/whisper) / [faster-whisper](https://github.com/SYSTRAN/faster-whisper) / [WhisperX](https://github.com/m-bain/whisperX) — transcription
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — URL import
 - [ffmpeg](https://ffmpeg.org) — video processing
 - [Playwright](https://playwright.dev) — subtitle rendering

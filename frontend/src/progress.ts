@@ -84,12 +84,6 @@ export function openProgressWs(jobId: string): Promise<WebSocket> {
         return;
       }
 
-      // URL-import: yt-dlp finished pulling bytes. Leave bar as-is; Uploader
-      // will flip to "Transcribing…" once the POST /api/fetch-url returns.
-      if (msg?.phase === "download_done") return;
-
-      if (msg?.phase === "download_error") return;
-
       if (msg && typeof msg.percent === "number") {
         if (store.progressPhase === "done") return;
         store.setProgress(msg.phase ?? "idle", Math.max(0, Math.min(100, msg.percent)));

@@ -42,7 +42,6 @@ export type Size = { w_pct: number; h_pct: number };
 export type ProgressPhase =
   | "idle"
   | "upload"
-  | "download"
   | "transcribe"
   | "align"
   | "encode"

@@ -2,7 +2,6 @@ import { useStore } from "../store";
 
 const PHASE_LABEL: Record<string, string> = {
   upload: "Uploading",
-  download: "Downloading",
   transcribe: "Transcribing",
   align: "Aligning words",
   encode: "Rendering",

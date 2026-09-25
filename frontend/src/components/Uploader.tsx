@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { cancelFetchUrl, fetchVideoFromUrl, uploadVideo, videoUrl } from "../api";
+import { uploadVideo, videoUrl } from "../api";
 import { LANGUAGES, PINNED_LANGUAGES } from "../languages";
 import { newJobId, openProgressWs } from "../progress";
 import { useStore } from "../store";
@@ -27,7 +27,6 @@ export function Uploader() {
   const [language, setLanguage] = useState<string>("en");
   const [model, setModel] = useState<string>("large-v3");
   const [dragActive, setDragActive] = useState(false);
-  const [urlValue, setUrlValue] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -86,64 +85,7 @@ export function Uploader() {
     }
   }
 
-  async function doUrlImport(rawUrl: string) {
-    const url = rawUrl.trim();
-    if (!url) return;
-    if (!/^https?:\/\//i.test(url)) {
-      setError("URL must start with http:// or https://");
-      return;
-    }
-    setBusy("uploading");
-    setError(null);
-    setProgress("download", 0);
-    setSubsStreaming(false);
-
-    const jobId = newJobId();
-    setJobId(jobId);
-    const ws = await openProgressWs(jobId);
-    wsRef.current = ws;
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    try {
-      const result = await fetchVideoFromUrl(url, {
-        jobId,
-        language,
-        model,
-        generateSubs,
-        signal: ctrl.signal,
-      });
-      setUploaded({ ...result, url: videoUrl(result.video_id) });
-      setUseSubs(generateSubs);
-      if (generateSubs && result.segments.length === 0) {
-        setSubsStreaming(true);
-        setProgress("transcribe", 0);
-      } else {
-        setProgress("done", 100);
-      }
-    } catch (err) {
-      if ((err as Error).name === "AbortError") {
-        setError(null);
-      } else {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-      setBusy("idle");
-      setProgress("idle", 0);
-    } finally {
-      abortRef.current = null;
-      if (!useStore.getState().subsStreaming) {
-        wsRef.current = null;
-        ws.close();
-      }
-    }
-  }
-
   function cancel() {
-    // Best-effort server-side cancel for any in-flight URL download tied to
-    // the current job. The POST runs on background so the UI reset is
-    // instant even if the backend is slow.
-    const jid = useStore.getState().jobId;
-    if (jid) void cancelFetchUrl(jid);
     abortRef.current?.abort();
     wsRef.current?.close();
     setBusy("idle");
@@ -183,37 +125,6 @@ export function Uploader() {
           <h1>Start a new caption project</h1>
         </div>
 
-        <div className="url-import" data-testid="url-import-row">
-          <div className="url-import-row-input">
-            <input
-              type="url"
-              data-testid="url-input"
-              className="url-import-input"
-              placeholder="Paste a video URL (YouTube, X, Vimeo, TikTok…)"
-              value={urlValue}
-              onChange={(e) => setUrlValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !disabled && urlValue.trim()) {
-                  e.preventDefault();
-                  void doUrlImport(urlValue);
-                }
-              }}
-              disabled={disabled}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            <button
-              type="button"
-              data-testid="url-import"
-              className="url-import-btn"
-              onClick={() => void doUrlImport(urlValue)}
-              disabled={disabled || !urlValue.trim()}
-            >
-              Import
-            </button>
-          </div>
-        </div>
-
         <div
           className={`dropzone${dragActive ? " active" : ""}${disabled ? " disabled" : ""}`}
           onDragOver={(e) => {
@@ -241,9 +152,7 @@ export function Uploader() {
           </div>
           <div className="dropzone-headline">
             {disabled
-              ? progressPhase === "download"
-                ? "Downloading…"
-                : progressPhase === "upload"
+              ? progressPhase === "upload"
                 ? "Uploading…"
                 : "Transcribing…"
               : "Drop a video or audio file or click to browse"}
