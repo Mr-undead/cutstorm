@@ -13,6 +13,20 @@ function fmtTime(t: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// Synthesizes a click on a temporary <a download> so the browser saves the
+// file without further user interaction. This works because it always runs
+// inside the export flow that originated from a real user gesture (the
+// Export button click), so the popup/download blocker lets it through.
+function triggerBrowserDownload(url: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.setAttribute("data-testid", "download-link");
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 500);
+}
+
 type TopBarProps = {
   onOpenSidebar: () => void;
 };
@@ -105,6 +119,9 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
           const url = downloadUrl(videoId, format, clipIndex);
 
           if (clipIndex !== undefined) {
+            const clipFilename = `clip-${clipIndex
+              .toString()
+              .padStart(2, "0")}.${format}`;
             setDownloads((prev) => [
               ...prev,
               {
@@ -113,14 +130,13 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
                 format,
               },
             ]);
+            // Download the clip automatically the moment its render finishes.
+            // The "Download Clip N" button below stays as a fallback so the
+            // user can still re-download (e.g. if the browser suppressed an
+            // automatic download).
+            triggerBrowserDownload(url, clipFilename);
           } else {
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `${videoId}.${format}`;
-            a.setAttribute("data-testid", "download-link");
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => a.remove(), 500);
+            triggerBrowserDownload(url, `${videoId}.${format}`);
           }
         } finally {
           ws.close();
