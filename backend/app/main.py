@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -1139,14 +1140,35 @@ def delete_transcript(video_id: str, drop_video: bool = False) -> dict:
 
 
 def _dir_size_bytes(path: Path) -> int:
+    """Sum of the sizes of the regular files physically stored under *path*.
+
+    Walks the tree without following symbolic links and charges every distinct
+    inode only once. This matters for Hugging Face model caches, which keep a
+    single copy of each file under ``blobs/`` and expose it through one or more
+    ``snapshots/<revision>/`` entries via symlinks: a plain ``rglob`` + ``stat``
+    follows those links, so the same bytes are charged again for every
+    revision. Hard links (same inode reachable from several pathnames) are
+    deduplicated for the same reason. The result matches what ``du`` reports
+    for the directory.
+    """
     total = 0
+    seen: set[tuple[int, int]] = set()
     try:
-        for p in path.rglob("*"):
-            if p.is_file():
+        for root, _dirs, files in os.walk(path, followlinks=False):
+            for name in files:
                 try:
-                    total += p.stat().st_size
+                    st = os.stat(os.path.join(root, name), follow_symlinks=False)
                 except OSError:
-                    pass
+                    continue
+                # Symlinks (and anything else that isn't a plain file) are not
+                # counted here; their target is charged where it really lives.
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                key = (st.st_dev, st.st_ino)
+                if key in seen:
+                    continue
+                seen.add(key)
+                total += st.st_size
     except Exception:  # pragma: no cover
         pass
     return total
