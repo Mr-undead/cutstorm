@@ -133,6 +133,11 @@ type State = {
   canvas: CanvasConfig;
   /** Social target the user is aiming at (Instagram Reels / none). Persisted. */
   socialPreset: SocialPreset;
+  /** Instagram Reels UI safe-area guide toggle — a preview-only overlay.
+   * Never affects crop, canvas config or export. The overlay only renders
+   * while `socialPreset === "instagram-reels"`, so the Instagram-specific
+   * guide can never stay active for None/other targets. */
+  reelsGuide: boolean;
   isAudioOnly: boolean;
   /** Upload-screen toggle: generate subtitles via whisper after upload. Persisted. */
   generateSubs: boolean;
@@ -201,6 +206,7 @@ type Actions = {
   setCanvas: (patch: Partial<CanvasConfig>) => void;
   setCustomCrop: (patch: Partial<CustomCrop>) => void;
   setSocialPreset: (preset: SocialPreset) => void;
+  setReelsGuide: (v: boolean) => void;
   setGenerateSubs: (v: boolean) => void;
   setUseSubs: (v: boolean) => void;
   setWatermark: (v: boolean) => void;
@@ -279,6 +285,7 @@ export const useStore = create<State & Actions>()(
         bg_color: "#000000",
       },
       socialPreset: "none",
+      reelsGuide: false,
       isAudioOnly: false,
       generateSubs: true,
       useSubs: true,
@@ -473,6 +480,10 @@ export const useStore = create<State & Actions>()(
             }
           : { socialPreset: preset },
       ),
+      // Preview-only viewing aid (Reels UI safe-area guide). Deliberately NOT
+      // part of the undo history (zundo partialize) — it changes nothing in
+      // the exported video.
+      setReelsGuide: (v) => set({ reelsGuide: v }),
       setGenerateSubs: (v) => set({ generateSubs: v }),
       setUseSubs: (v) => set({ useSubs: v }),
       setWatermark: (v) => set({ watermark: v }),
@@ -598,6 +609,7 @@ export const useStore = create<State & Actions>()(
           watermark: true,
           trimRange: { in_sec: 0, out_sec: 0, loop: false },
           socialPreset: "none" as SocialPreset,
+          reelsGuide: false,
           audio: {
             sourceVolume: 1.0,
             extraAudioId: null,
@@ -631,6 +643,7 @@ export const useStore = create<State & Actions>()(
         audio: s.audio,
         canvas: s.canvas,
         socialPreset: s.socialPreset,
+        reelsGuide: s.reelsGuide,
         isAudioOnly: s.isAudioOnly,
         generateSubs: s.generateSubs,
         useSubs: s.useSubs,
@@ -638,7 +651,7 @@ export const useStore = create<State & Actions>()(
         subsStreaming: s.subsStreaming,
         jobId: s.jobId,
       }),
-        version: 9,
+        version: 10,
         // Historical fields migrate forward:
         //   v1→v2: `canvas` gained mode/crop_anchor/custom (Feature 1).
         //   v2→v3: `trimRange` added (Feature Trim in/out).
@@ -711,6 +724,13 @@ export const useStore = create<State & Actions>()(
             // Pre-existing projects have no social target → default "none".
             // Never overwrite an existing value.
             p.socialPreset = p.socialPreset ?? "none";
+          }
+          if (version < 10) {
+            // v9→v10: Reels UI safe-area guide toggle (preview-only overlay).
+            // Existing projects keep the guide off. The overlay only renders
+            // while socialPreset === "instagram-reels", so a stale "on" value
+            // can never leak onto other canvas configurations.
+            p.reelsGuide = p.reelsGuide ?? false;
           }
           return p;
         },

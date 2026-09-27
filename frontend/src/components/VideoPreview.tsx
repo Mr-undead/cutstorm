@@ -13,6 +13,7 @@ import { getExtraAudioPlaybackUrl } from "../extraBlobs";
 import { useStore } from "../store";
 import { CropEditor } from "./CropEditor";
 import { PreviewToolbar } from "./PreviewToolbar";
+import { ReelsSafeAreaOverlay } from "./ReelsSafeAreaOverlay";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { Watermark } from "./Watermark";
 import { Timeline } from "./Timeline";
@@ -26,6 +27,8 @@ export function VideoPreview() {
   const videoH = useStore((s) => s.videoH);
   const useSubs = useStore((s) => s.useSubs);
   const watermark = useStore((s) => s.watermark);
+  const socialPreset = useStore((s) => s.socialPreset);
+  const reelsGuide = useStore((s) => s.reelsGuide);
   const trimRange = useStore((s) => s.trimRange);
   const sourceVolume = useStore((s) => s.audio.sourceVolume);
   const extraAudioId = useStore((s) => s.audio.extraAudioId);
@@ -46,6 +49,11 @@ export function VideoPreview() {
   // custom mode is the crop dims — not what we want for the preview frame.
   const frameW = canvas.mode === "custom" ? (videoW || resolved.targetW) : resolved.targetW;
   const frameH = canvas.mode === "custom" ? (videoH || resolved.targetH) : resolved.targetH;
+
+  // Reels UI guide: preview-only overlay. It only exists while the Instagram
+  // Reels social preset is active, so it can never linger once the user goes
+  // back to None / another target. Never touches crop, canvas or export.
+  const showReelsGuide = socialPreset === "instagram-reels" && reelsGuide;
 
   useLayoutEffect(() => {
     const el = stageRef.current;
@@ -227,9 +235,18 @@ export function VideoPreview() {
               }}
             />
             {canvas.mode === "custom" ? (
-              <CropEditor videoRef={videoRef as React.RefObject<HTMLMediaElement>} />
+              // In custom mode the crop rect IS the output canvas — render the
+              // guide inside it via CropEditor. The guide stays first in DOM
+              // order so subtitles/handles still paint above it.
+              <CropEditor
+                videoRef={videoRef as React.RefObject<HTMLMediaElement>}
+                guide={showReelsGuide ? <ReelsSafeAreaOverlay /> : null}
+              />
             ) : (
-              useSubs && <SubtitleOverlay videoRef={videoRef as React.RefObject<HTMLMediaElement>} />
+              <>
+                {showReelsGuide && <ReelsSafeAreaOverlay />}
+                {useSubs && <SubtitleOverlay videoRef={videoRef as React.RefObject<HTMLMediaElement>} />}
+              </>
             )}
             {canvas.mode !== "custom" && watermark && <Watermark />}
           </div>

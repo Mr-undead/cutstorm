@@ -8,7 +8,8 @@
  *   (the interactive CropEditor frame) is not unmounted
  * - manually changing the Canvas away from 9:16 → socialPreset resets to "none"
  * - persistence round-trip across reload
- * - persistence migration v8 → v9 (adds socialPreset="none")
+ * - persistence migration chain v8 → v10 (adds socialPreset="none"; v10 adds
+ *   the stage-2 `reelsGuide` toggle)
  *
  * The Canvas engine / export pipeline is intentionally untouched by this
  * feature, so these tests only assert store/UI behaviour — no export.
@@ -137,7 +138,7 @@ test("social preset persists across reload", async ({ page }) => {
   await expect(page.getByTestId("canvas-preset-9:16")).toHaveClass(/active/);
 });
 
-test("persist migrate: v8 (no socialPreset) → v9 adds socialPreset='none'", async ({ page }) => {
+test("persist migrate: v8 (no socialPreset) → v10 chain adds socialPreset='none'", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
     const v8 = {
@@ -192,7 +193,7 @@ test("persist migrate: v8 (no socialPreset) → v9 adds socialPreset='none'", as
     const raw = localStorage.getItem("cutstorm-state");
     return raw ? JSON.parse(raw) : null;
   });
-  expect(migrated?.version).toBe(9);
+  expect(migrated?.version).toBe(10);
   expect(migrated?.state?.socialPreset).toBe("none");
   // Previous v7→v8 migration still applied — the chain isn't broken.
   expect(migrated?.state?.subtitleTrack).toBe("source");

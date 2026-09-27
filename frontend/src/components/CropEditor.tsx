@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { useStore } from "../store";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 
@@ -28,8 +28,13 @@ type DragMode =
  */
 export function CropEditor({
   videoRef,
+  guide,
 }: {
   videoRef: React.RefObject<HTMLMediaElement>;
+  /** Optional preview-only overlay (Reels UI guide) rendered INSIDE the crop
+   * rect — the rect is the export canvas in custom mode. Purely presentational:
+   * pointer-events are disabled and it never touches crop state. */
+  guide?: ReactNode;
 }) {
   const custom = useStore((s) => s.canvas.custom);
   const setCustomCrop = useStore((s) => s.setCustomCrop);
@@ -146,6 +151,7 @@ export function CropEditor({
         }}
         onPointerDown={startMove}
       >
+        {guide}
         {useSubs && <SubtitleOverlay videoRef={videoRef} />}
         <div className="crop-handle tl" data-testid="crop-handle-tl" onPointerDown={startResize("tl")} />
         <div className="crop-handle tr" data-testid="crop-handle-tr" onPointerDown={startResize("tr")} />

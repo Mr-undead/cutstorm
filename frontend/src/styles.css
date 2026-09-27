@@ -1695,6 +1695,37 @@ label {
   pointer-events: none;
 }
 
+/* ---------- Reels UI safe-area guide (preview-only overlay) ---------- */
+
+/* Visual guide only — dashed frame marking the area the Reels app UI tends to
+   cover. Never affects crop, canvas config or export. The top/right/bottom/
+   left percent insets come as inline styles from ReelsSafeAreaOverlay, so the
+   guide scales with whichever element hosts it (preview-frame in preset mode,
+   crop-rect in custom mode). No z-index: DOM order keeps subtitles/handles
+   above it. */
+.reels-guide {
+  position: absolute;
+  border: 2px dashed rgba(124, 92, 255, 0.85);
+  background: rgba(124, 92, 255, 0.06);
+  pointer-events: none;
+}
+
+.reels-guide-label {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(10, 10, 15, 0.75);
+  border: 1px solid rgba(124, 92, 255, 0.85);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ---------- timeline (trim handles + audio tracks under preview) ---------- */
 
 .timeline {
