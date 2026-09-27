@@ -291,7 +291,7 @@ def api_fonts() -> dict:
 
 
 _VIDEO_ID_RE = re.compile(r"^[a-f0-9]{16}$")
-
+_CLIP_OUTPUT_RE = re.compile(r"^([a-f0-9]{16})_clip_(\d+)$")
 
 def _validate_video_id(video_id: str) -> None:
     if not _VIDEO_ID_RE.match(video_id):
@@ -364,12 +364,16 @@ def _find_extra_audio(extra_id: str) -> Path | None:
     return None
 
 
-def _output_path(video_id: str) -> Path:
-    return OUTPUTS_DIR / f"{video_id}.mp4"
+def _output_path(video_id: str, clip_index: int | None = None) -> Path:
+    if clip_index is None:
+        return OUTPUTS_DIR / f"{video_id}.mp4"
+    return OUTPUTS_DIR / f"{video_id}_clip_{clip_index:02d}.mp4"
 
 
-def _gif_output_path(video_id: str) -> Path:
-    return OUTPUTS_DIR / f"{video_id}.gif"
+def _gif_output_path(video_id: str, clip_index: int | None = None) -> Path:
+    if clip_index is None:
+        return OUTPUTS_DIR / f"{video_id}.gif"
+    return OUTPUTS_DIR / f"{video_id}_clip_{clip_index:02d}.gif"
 
 
 _GIF_PRESETS: dict[str, dict[str, str | int]] = {
@@ -1688,7 +1692,7 @@ async def api_export(
         trim_in, trim_out, extra_audio_path, loop_active,
     )
 
-    out = _output_path(req.video_id)
+    out = _output_path(req.video_id, req.clip_index)
     last_pct = -10
 
     def on_progress(pct: int) -> None:
@@ -1817,7 +1821,7 @@ async def api_export(
     final_path: Path = out
     output_format = req.format
     if req.format == "gif":
-        gif_path = _gif_output_path(req.video_id)
+        gif_path = _gif_output_path(req.video_id, req.clip_index)
         ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
         log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
         try:
@@ -1835,6 +1839,7 @@ async def api_export(
         video_id=req.video_id,
         output_path=str(final_path),
         output_format=output_format,
+	clip_index=req.clip_index,
         original_duration=info.duration,
         output_duration=new_duration,
         cuts=keeps,
@@ -1842,19 +1847,35 @@ async def api_export(
 
 
 @app.get("/api/download/{video_id}")
-def api_download(video_id: str, format: str = "mp4") -> FileResponse:
+def api_download(
+    video_id: str,
+    format: str = "mp4",
+    clip_index: int | None = Query(default=None, ge=1, le=999),
+) -> FileResponse:
     _validate_video_id(video_id)
+
     if format == "gif":
-        out = _gif_output_path(video_id)
+        out = _gif_output_path(video_id, clip_index)
         media_type = "image/gif"
         ext = "gif"
     else:
-        out = _output_path(video_id)
+        out = _output_path(video_id, clip_index)
         media_type = "video/mp4"
         ext = "mp4"
+
     if not out.exists():
         raise HTTPException(status_code=404, detail="output not found")
-    return FileResponse(out, media_type=media_type, filename=f"{video_id}.{ext}")
+
+    if clip_index is None:
+        filename = f"{video_id}.{ext}"
+    else:
+        filename = f"clip-{clip_index:02d}.{ext}"
+
+    return FileResponse(
+        out,
+        media_type=media_type,
+        filename=filename,
+    )
 
 
 @app.websocket("/ws/progress/{job_id}")

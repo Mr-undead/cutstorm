@@ -145,6 +145,7 @@ export type ExportResponse = {
   video_id: string;
   output_path: string;
   output_format?: ExportFormat;
+  clip_index?: number | null;
   original_duration?: number | null;
   output_duration?: number | null;
   cuts?: [number, number][] | null;
@@ -166,6 +167,7 @@ export async function exportVideo(args: {
   format?: ExportFormat;
   gifQuality?: GifQuality;
   watermark?: boolean;
+  clipIndex?: number;
   subtitleTrack?: "source" | "extra";
 }): Promise<ExportResponse> {
   const url = args.jobId
@@ -199,6 +201,7 @@ export async function exportVideo(args: {
       format: args.format ?? "mp4",
       gif_quality: args.gifQuality ?? "medium",
       watermark: args.watermark !== false,
+      clip_index: args.clipIndex ?? null,
       subtitle_track: args.subtitleTrack ?? "source",
     }),
   });
@@ -247,8 +250,18 @@ export async function transcribeExtra(
   return res.json();
 }
 
-export function downloadUrl(videoId: string, format: ExportFormat = "mp4"): string {
-  return `${API_BASE}/api/download/${videoId}?format=${format}`;
+export function downloadUrl(
+  videoId: string,
+  format: ExportFormat = "mp4",
+  clipIndex?: number,
+): string {
+  const params = new URLSearchParams({ format });
+
+  if (clipIndex !== undefined) {
+    params.set("clip_index", String(clipIndex));
+  }
+
+  return `${API_BASE}/api/download/${videoId}?${params.toString()}`;
 }
 
 export type TranscriptSummary = {

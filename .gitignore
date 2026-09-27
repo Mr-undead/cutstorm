@@ -41,3 +41,6 @@ frontend/e2e/output/
 
 # Local synthetic upload fixture for e2e (regenerated on demand).
 frontend/e2e/fixtures/
+
+*.bak
+*.bak-*

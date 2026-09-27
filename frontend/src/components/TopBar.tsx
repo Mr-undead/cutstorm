@@ -29,6 +29,7 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
   const size = useStore((s) => s.size);
   const trim = useStore((s) => s.trim);
   const trimRange = useStore((s) => s.trimRange);
+  const clips = useStore((s) => s.clips);
   const audio = useStore((s) => s.audio);
   const canvas = useStore((s) => s.canvas);
   const useSubs = useStore((s) => s.useSubs);
@@ -40,50 +41,97 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
   const newProject = useStore((s) => s.newProject);
   const [format, setFormat] = useState<ExportFormat>("mp4");
   const [gifQuality, setGifQuality] = useState<GifQuality>("medium");
+  const [downloads, setDownloads] = useState<
+    Array<{
+      clipIndex: number;
+      url: string;
+      format: ExportFormat;
+    }>
+  >([]);
 
-  async function onExport() {
+    async function onExport() {
     if (!videoId) return;
+
     setBusy("exporting");
     setError(null);
     setProgress("encode", 0);
+    setDownloads([]);
 
-    const jobId = newJobId();
-    const ws = await openProgressWs(jobId);
+    const clipsToExport = clips.length > 0 ? clips : [null];
 
     try {
-      await exportVideo({
-        videoId,
-        segments: useSubs ? segments : [],
-        style,
-        position,
-        size,
-        canvas,
-        jobId,
-        trimSilences: trim.enabled,
-        silenceThresholdSec: trim.threshold_sec,
-        silencePaddingSec: trim.padding_sec,
-        trim: trimRange,
-        audio,
-        format,
-        gifQuality,
-        watermark,
-        subtitleTrack,
-      });
-      const url = downloadUrl(videoId, format);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${videoId}.${format}`;
-      a.setAttribute("data-testid", "download-link");
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => a.remove(), 500);
+      for (let i = 0; i < clipsToExport.length; i += 1) {
+        const clip = clipsToExport[i];
+        const clipIndex = clip ? i + 1 : undefined;
+
+        const jobId = newJobId();
+        const ws = await openProgressWs(jobId);
+
+        try {
+          const trimForExport = clip
+            ? {
+                in_sec: clip.in_sec,
+                out_sec: clip.out_sec,
+                loop: false,
+              }
+            : trimRange;
+
+          await exportVideo({
+            videoId,
+            segments: useSubs ? segments : [],
+            style,
+            position,
+            size,
+            canvas,
+            jobId,
+            trimSilences: trim.enabled,
+            silenceThresholdSec: trim.threshold_sec,
+            silencePaddingSec: trim.padding_sec,
+            trim: trimForExport,
+            audio,
+            format,
+            gifQuality,
+            watermark,
+            subtitleTrack,
+            clipIndex,
+          });
+
+          const url = downloadUrl(videoId, format, clipIndex);
+
+          if (clipIndex !== undefined) {
+            setDownloads((prev) => [
+              ...prev,
+              {
+                clipIndex,
+                url,
+                format,
+              },
+            ]);
+          } else {
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${videoId}.${format}`;
+            a.setAttribute("data-testid", "download-link");
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => a.remove(), 500);
+          }
+
+          setProgress(
+            "encode",
+            Math.round(((i + 1) / clipsToExport.length) * 100),
+          );
+        } finally {
+          ws.close();
+        }
+      }
+
       setProgress("done", 100);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setProgress("idle", 0);
     } finally {
       setBusy("idle");
-      ws.close();
     }
   }
 
@@ -155,6 +203,23 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
                 {busy === "exporting" ? "Exporting…" : "Export"}
               </button>
             </div>
+            {downloads.length > 0 && (
+              <div className="clip-downloads">
+                {downloads.map((download) => (
+                  <a
+                    key={download.clipIndex}
+                    href={download.url}
+                    download={`clip-${download.clipIndex
+                      .toString()
+                      .padStart(2, "0")}.${download.format}`}
+                    className="secondary"
+                    data-testid={`download-clip-${download.clipIndex}`}
+                  >
+                    Download Clip {download.clipIndex}
+                  </a>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
