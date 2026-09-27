@@ -23,8 +23,9 @@ WORKDIR /app
 # A stub `app/__init__.py` keeps setuptools happy without invalidating the
 # layer when real source code changes — the real app/ is copied below.
 COPY backend/pyproject.toml ./
-RUN mkdir -p app && touch app/__init__.py \
-    && pip install --no-cache-dir -e . \
+RUN --mount=type=cache,id=cutstorm-pip,target=/root/.cache/pip \
+    mkdir -p app && touch app/__init__.py \
+    && pip install -e . \
     && rm -rf app
 # Headless Chromium for the renderer pipeline. `--with-deps` installs libnss3
 # & friends via apt; chromium binary lands under /root/.cache/ms-playwright.

@@ -110,6 +110,15 @@
       "license_dir": "ofl",
       "slug": "notosanssc",
       "files": ["NotoSansSC[wght].ttf"]
+    },
+
+    {
+      "family": "Vazirmatn",
+      "category": "sans",
+      "scripts": ["arabic", "latin"],
+      "license_dir": "ofl",
+      "slug": "vazirmatn",
+      "files": ["Vazirmatn[wght].ttf"]
     }
   ]
 }
