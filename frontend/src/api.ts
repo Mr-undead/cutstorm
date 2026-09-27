@@ -5,6 +5,7 @@ import type {
   Position,
   Segment,
   Size,
+  SocialPreset,
   Style,
   TrimRange,
 } from "./store";
@@ -21,6 +22,7 @@ export type ProjectStatePayload = {
   updated_at?: number;
   extra_segments?: Segment[];
   subtitle_track?: "source" | "extra";
+  social_preset?: SocialPreset;
 };
 
 const API_BASE = "";

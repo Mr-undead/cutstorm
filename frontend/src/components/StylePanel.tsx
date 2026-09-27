@@ -40,6 +40,8 @@ export function StylePanel() {
   const canvas = useStore((s) => s.canvas);
   const setCanvas = useStore((s) => s.setCanvas);
   const setCustomCrop = useStore((s) => s.setCustomCrop);
+  const socialPreset = useStore((s) => s.socialPreset);
+  const setSocialPreset = useStore((s) => s.setSocialPreset);
   const isAudioOnly = useStore((s) => s.isAudioOnly);
   const videoW = useStore((s) => s.videoW);
   const videoH = useStore((s) => s.videoH);
@@ -76,6 +78,28 @@ export function StylePanel() {
         <h2>Style</h2>
       </div>
       <div className="pane-body">
+        <div className="section-title">Social Preset</div>
+        <div className="section">
+          <div className="pill-group" data-testid="social-preset-group">
+            <button
+              type="button"
+              className={socialPreset === "none" ? "active" : ""}
+              onClick={() => setSocialPreset("none")}
+              data-testid="social-preset-none"
+            >
+              None
+            </button>
+            <button
+              type="button"
+              className={socialPreset === "instagram-reels" ? "active" : ""}
+              onClick={() => setSocialPreset("instagram-reels")}
+              data-testid="social-preset-instagram-reels"
+            >
+              Instagram Reels
+            </button>
+          </div>
+        </div>
+
         <div className="section-title">Canvas {isAudioOnly ? "(audio + chromakey)" : ""}</div>
         <div className="section">
           {!isAudioOnly && (

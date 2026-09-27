@@ -71,7 +71,7 @@ test("persist migrate: v7 → v8 adds loop/segmentsSource/segmentsExtra/subtitle
     const raw = localStorage.getItem("cutstorm-state");
     return raw ? JSON.parse(raw) : null;
   });
-  expect(migrated?.version).toBe(8);
+  expect(migrated?.version).toBe(9);
   expect(migrated?.state?.trimRange).toEqual({ in_sec: 0, out_sec: 0, loop: false });
   expect(Array.isArray(migrated?.state?.segmentsSource)).toBe(true);
   expect(migrated?.state?.segmentsSource.length).toBe(1);

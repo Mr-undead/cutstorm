@@ -66,7 +66,7 @@ test("persist migrate: v2 shape upgrades to current version without crashing", a
     const raw = localStorage.getItem("cutstorm-state");
     return raw ? JSON.parse(raw) : null;
   });
-  expect(migrated?.version).toBe(8);
+  expect(migrated?.version).toBe(9);
   // v8 trimRange has the loop flag.
   expect(migrated?.state?.trimRange).toEqual({ in_sec: 0, out_sec: 0, loop: false });
   expect(migrated?.state?.audio).toMatchObject({

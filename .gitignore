@@ -38,3 +38,6 @@ project_contents.txt
 
 # Playwright / smoke test outputs — regenerated on every run.
 frontend/e2e/output/
+
+# Local synthetic upload fixture for e2e (regenerated on demand).
+frontend/e2e/fixtures/

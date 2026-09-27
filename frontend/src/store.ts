@@ -58,6 +58,11 @@ export type AspectPreset = "source" | "9:16" | "16:9" | "1:1" | "4:5";
 export type CanvasMode = "preset" | "custom";
 export type CropAnchor = "left" | "center" | "right" | "top" | "bottom";
 
+/** Social target presets (e.g. Instagram Reels). A social preset is NOT a
+ * Canvas preset — it drives/accepted a Canvas config (Reels → 9:16) but stays
+ * a separate concept so the user can still tweak the canvas afterwards. */
+export type SocialPreset = "none" | "instagram-reels";
+
 export type CustomCrop = {
   x_pct: number;
   y_pct: number;
@@ -126,6 +131,8 @@ type State = {
   trimRange: TrimRange;
   audio: AudioConfig;
   canvas: CanvasConfig;
+  /** Social target the user is aiming at (Instagram Reels / none). Persisted. */
+  socialPreset: SocialPreset;
   isAudioOnly: boolean;
   /** Upload-screen toggle: generate subtitles via whisper after upload. Persisted. */
   generateSubs: boolean;
@@ -169,6 +176,7 @@ type Actions = {
       display_mode?: DisplayMode;
       extra_segments?: Segment[];
       subtitle_track?: SubtitleTrack;
+      social_preset?: SocialPreset;
     } | null;
   }) => void;
   setLoop: (v: boolean) => void;
@@ -192,6 +200,7 @@ type Actions = {
   setAudio: (patch: Partial<AudioConfig>) => void;
   setCanvas: (patch: Partial<CanvasConfig>) => void;
   setCustomCrop: (patch: Partial<CustomCrop>) => void;
+  setSocialPreset: (preset: SocialPreset) => void;
   setGenerateSubs: (v: boolean) => void;
   setUseSubs: (v: boolean) => void;
   setWatermark: (v: boolean) => void;
@@ -269,6 +278,7 @@ export const useStore = create<State & Actions>()(
         custom: { x_pct: 10, y_pct: 10, w_pct: 80, h_pct: 80 },
         bg_color: "#000000",
       },
+      socialPreset: "none",
       isAudioOnly: false,
       generateSubs: true,
       useSubs: true,
@@ -304,6 +314,9 @@ export const useStore = create<State & Actions>()(
             canvas: isAudio && s.canvas.preset === "source"
               ? { ...s.canvas, preset: "9:16", bg_color: s.canvas.bg_color === "#000000" ? "#00B140" : s.canvas.bg_color }
               : s.canvas,
+            // A fresh upload starts a new edit — don't carry a social target
+            // from the previous project.
+            socialPreset: "none" as SocialPreset,
           };
         }),
       loadProject: (r) => set((s) => {
@@ -333,6 +346,9 @@ export const useStore = create<State & Actions>()(
           position: p?.position ?? s.position,
           size: p?.size ?? s.size,
           canvas: p?.canvas ?? s.canvas,
+          // Restore the saved social target; projects predating this field fall
+          // back to the current value (defaults to "none").
+          socialPreset: p?.social_preset ?? s.socialPreset,
           trimRange: p?.trim_range
             ? { in_sec: p.trim_range.in_sec, out_sec: p.trim_range.out_sec, loop: !!p.trim_range.loop }
             : { in_sec: 0, out_sec: 0, loop: false },
@@ -430,7 +446,33 @@ export const useStore = create<State & Actions>()(
         return { trimRange: next };
       }),
       setAudio: (patch) => set((s) => ({ audio: { ...s.audio, ...patch } })),
-      setCanvas: (patch) => set((s) => ({ canvas: { ...s.canvas, ...patch } })),
+      setCanvas: (patch) => set((s) => {
+        // Selecting a different canvas mode/preset is a manual canvas change:
+        // the output is no longer the social preset's target frame, so drop the
+        // social target back to "none". Anchor / bg-color tweaks are NOT canvas
+        // changes and keep the social preset intact.
+        const manualCanvasChange =
+          (patch.preset !== undefined && patch.preset !== s.canvas.preset) ||
+          (patch.mode !== undefined && patch.mode !== s.canvas.mode);
+        return {
+          canvas: { ...s.canvas, ...patch },
+          ...(manualCanvasChange ? { socialPreset: "none" as SocialPreset } : {}),
+        };
+      }),
+      setSocialPreset: (preset) => set((s) =>
+        // Applying Instagram Reels snaps the Canvas PRESET to 9:16, atomically
+        // in a single set — so the manual-canvas-change reset above never fires
+        // for this operation and clobber the preset we just picked.
+        // `canvas.mode` is deliberately left untouched: forcing it back to
+        // "preset" would unmount CropEditor, throwing away an in-progress
+        // custom crop / reframe (the interactive frame on the preview).
+        preset === "instagram-reels"
+          ? {
+              socialPreset: preset,
+              canvas: { ...s.canvas, preset: "9:16" as AspectPreset },
+            }
+          : { socialPreset: preset },
+      ),
       setGenerateSubs: (v) => set({ generateSubs: v }),
       setUseSubs: (v) => set({ useSubs: v }),
       setWatermark: (v) => set({ watermark: v }),
@@ -486,7 +528,9 @@ export const useStore = create<State & Actions>()(
         if (next.y_pct < 0) next.y_pct = 0;
         if (next.x_pct > 95) next.x_pct = 95;
         if (next.y_pct > 95) next.y_pct = 95;
-        return { canvas: { ...s.canvas, custom: next } };
+        // A custom crop is a manual canvas change — the social target no longer
+        // describes the output frame.
+        return { canvas: { ...s.canvas, custom: next }, socialPreset: "none" as SocialPreset };
       }),
       playPause: () => {
         const el = useStore.getState().videoEl;
@@ -553,6 +597,7 @@ export const useStore = create<State & Actions>()(
           jobId: null,
           watermark: true,
           trimRange: { in_sec: 0, out_sec: 0, loop: false },
+          socialPreset: "none" as SocialPreset,
           audio: {
             sourceVolume: 1.0,
             extraAudioId: null,
@@ -585,6 +630,7 @@ export const useStore = create<State & Actions>()(
         trimRange: s.trimRange,
         audio: s.audio,
         canvas: s.canvas,
+        socialPreset: s.socialPreset,
         isAudioOnly: s.isAudioOnly,
         generateSubs: s.generateSubs,
         useSubs: s.useSubs,
@@ -592,7 +638,7 @@ export const useStore = create<State & Actions>()(
         subsStreaming: s.subsStreaming,
         jobId: s.jobId,
       }),
-        version: 8,
+        version: 9,
         // Historical fields migrate forward:
         //   v1→v2: `canvas` gained mode/crop_anchor/custom (Feature 1).
         //   v2→v3: `trimRange` added (Feature Trim in/out).
@@ -659,6 +705,12 @@ export const useStore = create<State & Actions>()(
             p.segmentsSource = (p.segmentsSource as unknown) ?? segs;
             p.segmentsExtra = (p.segmentsExtra as unknown) ?? [];
             p.subtitleTrack = (p.subtitleTrack as unknown) ?? "source";
+          }
+          if (version < 9) {
+            // v8→v9: Social Preset selector (Instagram Reels → Canvas 9:16).
+            // Pre-existing projects have no social target → default "none".
+            // Never overwrite an existing value.
+            p.socialPreset = p.socialPreset ?? "none";
           }
           return p;
         },
