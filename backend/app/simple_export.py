@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import cancel
+
 log = logging.getLogger(__name__)
 
 ProgressCb = Callable[[int], None]
@@ -26,6 +28,7 @@ def run_stream_copy(
     source: Path,
     out: Path,
     on_progress: Optional[ProgressCb] = None,
+    cancel_key: str | None = None,
 ) -> None:
     """Case A: canvas=source, no trim, no overlay, not audio-only."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +39,7 @@ def run_stream_copy(
         str(out),
     ]
     log.info("simple_export.stream_copy cmd=%s", " ".join(cmd))
-    _run(cmd)
+    _run(cmd, cancel_key=cancel_key)
     if on_progress is not None:
         on_progress(100)
 
@@ -58,6 +61,7 @@ def run_filter_only(
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
     fps: int = 30,
+    cancel_key: str | None = None,
 ) -> None:
     """Case B: canvas transform and/or trim, but no subtitle overlay.
 
@@ -199,19 +203,28 @@ def run_filter_only(
         cmd += ["-shortest"]
     cmd += [str(out)]
     log.info("simple_export.filter_only cmd=%s", " ".join(cmd))
-    _run(cmd)
+    _run(cmd, cancel_key=cancel_key)
     if on_progress is not None:
         on_progress(100)
 
 
-def _run(cmd: list[str]) -> None:
+def _run(cmd: list[str], cancel_key: str | None = None) -> None:
     stderr_file = tempfile.TemporaryFile(mode="w+b")
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+    if cancel_key is not None:
+        cancel.register_proc(cancel_key, proc)
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
         rc = proc.wait()
         stderr_file.seek(0)
         err = stderr_file.read().decode("utf-8", errors="replace")[-3000:]
     finally:
+        if cancel_key is not None:
+            cancel.unregister_proc(cancel_key, proc)
         stderr_file.close()
+    # A terminate() from the cancel endpoint also makes rc != 0; check the
+    # flag first so a user Stop surfaces as a clean cancel, not an ffmpeg
+    # failure (which callers treat as a fatal error / retry candidate).
+    if cancel.is_cancelled(cancel_key):
+        raise cancel.OperationCancelled("export cancelled by user")
     if rc != 0:
         raise RuntimeError(f"ffmpeg failed (code {rc}):\n{err}")

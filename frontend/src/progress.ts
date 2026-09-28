@@ -39,6 +39,9 @@ export function openProgressWs(jobId: string): Promise<WebSocket> {
       if (msg?.phase === "transcribe_cancelled" || msg?.phase === "transcribe_error") {
         store.setSubsStreaming(false);
         store.setJobId(null);
+        // Stop clears the bar; on error App.tsx already resets the phase, this
+        // keeps both terminal states from leaving a frozen bar behind.
+        store.setProgress("idle", 0);
         setTimeout(() => ws.close(), 100);
         return;
       }
@@ -80,6 +83,15 @@ export function openProgressWs(jobId: string): Promise<WebSocket> {
       ) {
         store.setExtraSubsStreaming(false);
         store.setJobId(null);
+        store.setProgress("idle", 0);
+        setTimeout(() => ws.close(), 100);
+        return;
+      }
+
+      // User pressed Stop on an export. The waiting POST /api/export is
+      // aborted by `cancelExport`; this just settles the shared bar.
+      if (msg?.phase === "export_cancelled") {
+        store.setProgress("idle", 0);
         setTimeout(() => ws.close(), 100);
         return;
       }

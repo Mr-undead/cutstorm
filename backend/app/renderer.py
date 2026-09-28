@@ -19,6 +19,7 @@ from typing import Callable, Iterable, Optional
 from playwright.async_api import async_playwright
 
 from .canvas import hex_to_ffmpeg_color
+from . import cancel
 from .models import Canvas, Position, Segment, Size, Style
 from .overlay_timing import compute_overlay_change_times
 
@@ -71,6 +72,7 @@ async def _capture_frames(
     style: Style,
     on_frame: Callable[[bytes], None],
     on_progress: Optional[ProgressCb] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> int:
     """Drive headless Chromium, yield PNG bytes per frame via on_frame.
 
@@ -79,6 +81,9 @@ async def _capture_frames(
     actually changes. Between adjacent points the PNG is identical, so we
     re-emit the cached bytes to ffmpeg's stdin for every frame in that
     interval. Set `CUTSTORM_DEDUP=0` to force the old per-frame render path.
+
+    `should_cancel()` is polled once per frame; True raises
+    `cancel.OperationCancelled` so the caller can kill ffmpeg and clean up.
     """
     total_frames = max(1, int(round(duration * fps)))
     last_pct = -10
@@ -112,6 +117,8 @@ async def _capture_frames(
         reuses = 0
 
         for i in range(total_frames):
+            if should_cancel is not None and should_cancel():
+                raise cancel.OperationCancelled("export cancelled by user")
             t = i / fps
             while ci + 1 < len(change_times) and change_times[ci + 1] <= t:
                 ci += 1
@@ -386,6 +393,7 @@ def render_export(
     watermark: bool = False,
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
+    cancel_key: str | None = None,
 ) -> None:
     """Synchronous entry. Runs Playwright frame capture + ffmpeg pipe.
 
@@ -432,6 +440,11 @@ def render_export(
         stderr=stderr_file,
     )
     assert proc.stdin is not None
+    if cancel_key is not None:
+        cancel.register_proc(cancel_key, proc)
+
+    def should_cancel() -> bool:
+        return cancel.is_cancelled(cancel_key)
 
     frames_written = {"n": 0}
     pipe_closed = {"v": False}
@@ -464,6 +477,7 @@ def render_export(
             style=style,
             on_frame=on_frame,
             on_progress=on_progress,
+            should_cancel=should_cancel,
         )
 
     err_tail = ""
@@ -487,10 +501,16 @@ def render_export(
             pass
         raise
     finally:
+        if cancel_key is not None:
+            cancel.unregister_proc(cancel_key, proc)
         stderr_file.seek(0)
         err_tail = stderr_file.read().decode("utf-8", errors="replace")[-3000:]
         stderr_file.close()
 
+    # terminate() from the cancel endpoint also makes the exit code non-zero;
+    # surface a clean cancel before the generic failure branch.
+    if cancel.is_cancelled(cancel_key):
+        raise cancel.OperationCancelled("export cancelled by user")
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed (code {proc.returncode}):\n{err_tail}")
     if on_progress is not None:

@@ -154,6 +154,38 @@ export type ExportResponse = {
   cuts?: [number, number][] | null;
 };
 
+/**
+ * Export cancellation plumbing.
+ *
+ * `cancelExport(jobId)` POSTs to the backend cancel endpoint (which kills the
+ * ffmpeg/Chromium child) and then aborts the in-flight `POST /api/export`
+ * fetch, so the UI unsticks even if the server takes a moment to unwind.
+ * The abort signal is registered per job id by `registerExportAbort`.
+ */
+const _exportAborts = new Map<string, AbortController>();
+
+/** Create + register the AbortSignal for an export run. Returns the signal to
+ * pass to `exportVideo`. Call `clearExportAbort` when the request settles. */
+export function registerExportAbort(jobId: string): AbortSignal {
+  // Replace any stale controller for the same id (shouldn't happen — ids are
+  // unique per run — but keeps the map from growing if a run never settles).
+  _exportAborts.get(jobId)?.abort();
+  const ctrl = new AbortController();
+  _exportAborts.set(jobId, ctrl);
+  return ctrl.signal;
+}
+
+export function clearExportAbort(jobId: string): void {
+  _exportAborts.delete(jobId);
+}
+
+/** True for both cancellation flavours: a local abort (AbortError) or the
+ * backend's 499 "export cancelled" response. */
+export function isExportCancel(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.name === "AbortError" || err.name === "ExportCancelledError";
+}
+
 export async function exportVideo(args: {
   videoId: string;
   segments: Segment[];
@@ -172,6 +204,8 @@ export async function exportVideo(args: {
   watermark?: boolean;
   clipIndex?: number;
   subtitleTrack?: "source" | "extra";
+  /** Aborted by `cancelExport` when the user presses Stop. */
+  signal?: AbortSignal;
 }): Promise<ExportResponse> {
   const url = args.jobId
     ? `${API_BASE}/api/export?job_id=${encodeURIComponent(args.jobId)}`
@@ -207,9 +241,39 @@ export async function exportVideo(args: {
       clip_index: args.clipIndex ?? null,
       subtitle_track: args.subtitleTrack ?? "source",
     }),
+    signal: args.signal,
   });
+  if (res.status === 499) {
+    // Backend reports a user cancellation, not a failure.
+    const err = new Error("export cancelled");
+    err.name = "ExportCancelledError";
+    throw err;
+  }
   if (!res.ok) throw new Error(`export failed: ${res.status} ${await res.text()}`);
   return res.json();
+}
+
+export async function cancelExport(jobId: string): Promise<boolean> {
+  let cancelled = false;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/export/${encodeURIComponent(jobId)}/cancel`,
+      { method: "POST", signal: AbortSignal.timeout(2000) },
+    );
+    if (res.ok) {
+      const body = await res.json();
+      cancelled = !!body.cancelled;
+    }
+  } catch {
+    // Timeout or network — the abort below still unsticks the UI.
+    cancelled = false;
+  }
+  // Unblock the waiting export request. The POST already killed the worker,
+  // so its response (a 499) is redundant and the abort keeps the Export
+  // button from staying disabled while the thread unwinds.
+  _exportAborts.get(jobId)?.abort();
+  _exportAborts.delete(jobId);
+  return cancelled;
 }
 
 export type ExtraAudioResult = {

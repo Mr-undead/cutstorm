@@ -33,7 +33,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import ass_builder, burn, canvas as canvas_mod, peaks as peaks_mod, renderer, silence, simple_export, thumbnails as thumbs_mod, ws
+from . import ass_builder, burn, cancel as cancel_mod, canvas as canvas_mod, peaks as peaks_mod, renderer, silence, simple_export, thumbnails as thumbs_mod, ws
 from .models import (
     ExportRequest,
     ExportResponse,
@@ -383,10 +383,21 @@ _GIF_PRESETS: dict[str, dict[str, str | int]] = {
 }
 
 
-def _encode_gif(src_mp4: Path, dst_gif: Path, quality: str) -> None:
+def _encode_gif(
+    src_mp4: Path,
+    dst_gif: Path,
+    quality: str,
+    cancel_key: str | None = None,
+) -> None:
     """Two-pass palette-gen/use ffmpeg conversion from the rendered MP4 to GIF.
     Audio is dropped (GIF has no audio track). Runs in a worker thread via
-    asyncio.to_thread from the caller."""
+    asyncio.to_thread from the caller.
+
+    When `cancel_key` is given the process is registered with the cancel
+    registry so `/api/export/{job_id}/cancel` can terminate it mid-encode.
+    A terminated process exits non-zero → `CalledProcessError`, which the
+    caller distinguishes from a real failure via `cancel_mod.is_cancelled`.
+    """
     preset = _GIF_PRESETS.get(quality, _GIF_PRESETS["medium"])
     vf = (
         f"fps={preset['fps']},"
@@ -401,7 +412,16 @@ def _encode_gif(src_mp4: Path, dst_gif: Path, quality: str) -> None:
         "-an",
         str(dst_gif),
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if cancel_key is not None:
+        cancel_mod.register_proc(cancel_key, proc)
+    try:
+        _, stderr = proc.communicate()
+    finally:
+        if cancel_key is not None:
+            cancel_mod.unregister_proc(cancel_key, proc)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=stderr)
 
 
 def _ass_path(video_id: str) -> Path:
@@ -1571,6 +1591,12 @@ async def api_export(
     _validate_video_id(req.video_id)
     jid = job_id or x_job_id
     t0 = time.perf_counter()
+    # Cancellation key mirrors the `/api/export/{job_id}/cancel` path so the
+    # Stop button only needs the job id. Falls back to the request shape when
+    # the client didn't send one (e.g. curl / tests), which keeps the export
+    # itself cancellable-by-registry even without a WS channel.
+    cancel_key = f"export:{jid}" if jid else f"export:{req.video_id}:{req.clip_index}"
+    cancel_mod.new_flag(cancel_key)
     log.info(
         "export.request video_id=%s mode=%s segments=%d trim_silences=%s trim=(%.2f,%.2f) audio=(src=%.2f,extra=%s) job_id=%s",
         req.video_id,
@@ -1746,6 +1772,7 @@ async def api_export(
                 try:
                     simple_export.run_stream_copy(
                         source=media, out=out, on_progress=on_progress,
+                        cancel_key=cancel_key,
                     )
                     return
                 except RuntimeError as exc:
@@ -1769,6 +1796,7 @@ async def api_export(
                 watermark_path=watermark_path,
                 source_has_audio=info.has_audio,
                 loop_total_duration=loop_total_duration,
+                cancel_key=cancel_key,
             )
             return
         log.info(
@@ -1798,52 +1826,92 @@ async def api_export(
             watermark=wm_active,
             source_has_audio=info.has_audio,
             loop_total_duration=loop_total_duration,
+            cancel_key=cancel_key,
         )
 
+    def abort_cancelled() -> None:
+        """Drop the partial output and tell the UI the export is over."""
+        out.unlink(missing_ok=True)
+        log.info("export.cancelled video_id=%s job_id=%s", req.video_id, jid)
+        ws.push(jid, {"phase": "export_cancelled", "video_id": req.video_id})
+
+    # Everything below sits under one try/finally so the cancel flag is always
+    # released — including on the early HTTPException exits — otherwise a later
+    # export of the same video/clip would find a stale "cancelled" flag and
+    # abort itself instantly.
     try:
-        await asyncio.to_thread(do_render)
-    except Exception as exc:
-        log.exception("export.failed video_id=%s err=%s", req.video_id, exc)
-        raise HTTPException(status_code=500, detail=f"export failed: {exc}")
-
-    out_size = out.stat().st_size if out.exists() else 0
-    elapsed = time.perf_counter() - t0
-    log.info(
-        "export.done video_id=%s out_size=%d (%.1f MB) elapsed=%.1fs",
-        req.video_id,
-        out_size,
-        out_size / 1024 / 1024,
-        elapsed,
-    )
-    # GIF post-processing: convert the rendered MP4 into a GIF using a
-    # two-pass palette pipeline. The intermediate MP4 stays on disk so a
-    # subsequent MP4 download still works.
-    final_path: Path = out
-    output_format = req.format
-    if req.format == "gif":
-        gif_path = _gif_output_path(req.video_id, req.clip_index)
-        ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
-        log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
         try:
-            await asyncio.to_thread(_encode_gif, out, gif_path, req.gif_quality)
-        except subprocess.CalledProcessError as exc:
-            log.warning("export.gif_failed video_id=%s err=%s", req.video_id, exc)
-            raise HTTPException(status_code=500, detail=f"gif encode failed: {exc}")
-        final_path = gif_path
-        gif_size = gif_path.stat().st_size if gif_path.exists() else 0
-        log.info("export.gif done video_id=%s size=%d (%.1f MB)", req.video_id, gif_size, gif_size / 1024 / 1024)
+            await asyncio.to_thread(do_render)
+        except cancel_mod.OperationCancelled:
+            abort_cancelled()
+            raise HTTPException(status_code=499, detail="export cancelled")
+        except Exception as exc:
+            log.exception("export.failed video_id=%s err=%s", req.video_id, exc)
+            raise HTTPException(status_code=500, detail=f"export failed: {exc}")
 
-    ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id})
+        out_size = out.stat().st_size if out.exists() else 0
+        elapsed = time.perf_counter() - t0
+        log.info(
+            "export.done video_id=%s out_size=%d (%.1f MB) elapsed=%.1fs",
+            req.video_id,
+            out_size,
+            out_size / 1024 / 1024,
+            elapsed,
+        )
+        # GIF post-processing: convert the rendered MP4 into a GIF using a
+        # two-pass palette pipeline. The intermediate MP4 stays on disk so a
+        # subsequent MP4 download still works.
+        final_path: Path = out
+        output_format = req.format
+        if req.format == "gif":
+            gif_path = _gif_output_path(req.video_id, req.clip_index)
+            ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
+            log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
+            try:
+                await asyncio.to_thread(
+                    _encode_gif, out, gif_path, req.gif_quality, cancel_key,
+                )
+            except subprocess.CalledProcessError as exc:
+                # A Stop during the GIF encode also kills ffmpeg → non-zero exit.
+                # Distinguish that from a genuine encode failure.
+                if cancel_mod.is_cancelled(cancel_key):
+                    gif_path.unlink(missing_ok=True)
+                    abort_cancelled()
+                    raise HTTPException(status_code=499, detail="export cancelled")
+                log.warning("export.gif_failed video_id=%s err=%s", req.video_id, exc)
+                raise HTTPException(status_code=500, detail=f"gif encode failed: {exc}")
+            final_path = gif_path
+            gif_size = gif_path.stat().st_size if gif_path.exists() else 0
+            log.info("export.gif done video_id=%s size=%d (%.1f MB)", req.video_id, gif_size, gif_size / 1024 / 1024)
 
-    return ExportResponse(
-        video_id=req.video_id,
-        output_path=str(final_path),
-        output_format=output_format,
-	clip_index=req.clip_index,
-        original_duration=info.duration,
-        output_duration=new_duration,
-        cuts=keeps,
-    )
+        ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id})
+
+        return ExportResponse(
+            video_id=req.video_id,
+            output_path=str(final_path),
+            output_format=output_format,
+            clip_index=req.clip_index,
+            original_duration=info.duration,
+            output_duration=new_duration,
+            cuts=keeps,
+        )
+    finally:
+        cancel_mod.clear(cancel_key)
+
+
+@app.post("/api/export/{job_id}/cancel")
+def api_export_cancel(job_id: str) -> dict:
+    """Stop an in-flight export started by `job_id`.
+
+    Flips the registry flag (cooperative check between rendered frames) **and**
+    terminates the ffmpeg/Chromium child registered for the same key, so the
+    worker raises `OperationCancelled` within milliseconds. `api_export` turns
+    that into HTTP 499 + an `export_cancelled` WS phase and removes the partial
+    output file. Mirrors the shape of the other cancel endpoints.
+    """
+    cancelled = cancel_mod.request_cancel(f"export:{job_id}")
+    log.info("export.cancel job_id=%s cancelled=%s", job_id, cancelled)
+    return {"ok": True, "cancelled": cancelled}
 
 
 @app.get("/api/download/{video_id}")

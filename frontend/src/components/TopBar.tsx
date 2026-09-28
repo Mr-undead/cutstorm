@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { exportVideo, downloadUrl, type ExportFormat, type GifQuality } from "../api";
+import {
+  clearExportAbort,
+  downloadUrl,
+  exportVideo,
+  isExportCancel,
+  registerExportAbort,
+  type ExportFormat,
+  type GifQuality,
+} from "../api";
 import logoUrl from "../assets/lockup.png";
 import { newJobId, openProgressWs } from "../progress";
 import { useStore } from "../store";
@@ -38,6 +46,7 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
   const setBusy = useStore((s) => s.setBusy);
   const setError = useStore((s) => s.setError);
   const setProgress = useStore((s) => s.setProgress);
+  const setExportJobId = useStore((s) => s.setExportJobId);
   const newProject = useStore((s) => s.newProject);
   const [format, setFormat] = useState<ExportFormat>("mp4");
   const [gifQuality, setGifQuality] = useState<GifQuality>("medium");
@@ -58,6 +67,9 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
     setDownloads([]);
 
     const clipsToExport = clips.length > 0 ? clips : [null];
+    // Set when the user hits Stop on the progress bar: the remaining clips are
+    // skipped and no error toast is shown (cancellation is not a failure).
+    let cancelledByUser = false;
 
     try {
       for (let i = 0; i < clipsToExport.length; i += 1) {
@@ -65,6 +77,10 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
         const clipIndex = clip ? i + 1 : undefined;
 
         const jobId = newJobId();
+        // Exposed to the ProgressBar's Stop button, which POSTs to
+        // /api/export/{jobId}/cancel.
+        setExportJobId(jobId);
+        const signal = registerExportAbort(jobId);
         const ws = await openProgressWs(jobId);
 
         try {
@@ -94,6 +110,7 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
             watermark,
             subtitleTrack,
             clipIndex,
+            signal,
           });
 
           const url = downloadUrl(videoId, format, clipIndex);
@@ -121,16 +138,30 @@ export function TopBar({ onOpenSidebar }: TopBarProps) {
             "encode",
             Math.round(((i + 1) / clipsToExport.length) * 100),
           );
+        } catch (err) {
+          // Stop was pressed: the backend killed the render and deleted the
+          // partial output, so this is a clean cancel — not a failure.
+          if (isExportCancel(err)) {
+            cancelledByUser = true;
+            break;
+          }
+          throw err;
         } finally {
           ws.close();
+          clearExportAbort(jobId);
         }
       }
 
-      setProgress("done", 100);
+      if (cancelledByUser) {
+        setProgress("idle", 0);
+      } else {
+        setProgress("done", 100);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setProgress("idle", 0);
     } finally {
+      setExportJobId(null);
       setBusy("idle");
     }
   }

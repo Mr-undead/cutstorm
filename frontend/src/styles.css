@@ -1339,6 +1339,51 @@ label {
   transition: width 150ms ease;
 }
 
+/* Row that keeps the progress track and the Stop button on the same line. */
+.progress-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-body .progress-bar-track {
+  flex: 1;
+}
+
+/* Stop / cancel affordance pinned to the end of the progress track. Uses the
+   theme's danger tint so it reads as destructive without shouting. */
+.progress-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #ffb4b4;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.progress-stop:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.progress-stop:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.progress-stop svg {
+  flex: none;
+}
+
 /* ---------- sidebar drawer ---------- */
 
 .sidebar-backdrop {

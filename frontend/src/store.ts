@@ -163,6 +163,10 @@ type State = {
   /** Persisted across reloads so we can reconnect to the progress WS for an
    * in-flight whisper run. Cleared on reset / replace. */
   jobId: string | null;
+  /** Job id of the export currently running on the server, set by TopBar for
+   * the duration of the `POST /api/export` call. Transient — never persisted —
+   * and read by the ProgressBar's Stop button to build the cancel request. */
+  exportJobId: string | null;
 };
 
 type Actions = {
@@ -231,6 +235,7 @@ type Actions = {
   setWatermark: (v: boolean) => void;
   setSubsStreaming: (v: boolean) => void;
   setJobId: (id: string | null) => void;
+  setExportJobId: (id: string | null) => void;
   mergeSegments: (segs: Segment[]) => void;
   appendSegment: (seg: Segment, index: number) => void;
   newProject: () => Promise<void>;
@@ -314,6 +319,7 @@ export const useStore = create<State & Actions>()(
       watermark: true,
       subsStreaming: false,
       jobId: null,
+      exportJobId: null,
       setUploaded: (r) =>
         set((s) => {
           const isAudio = !!r.is_audio_only || (r.width === 0 && r.height === 0);
@@ -640,6 +646,7 @@ export const useStore = create<State & Actions>()(
       setWatermark: (v) => set({ watermark: v }),
       setSubsStreaming: (v) => set({ subsStreaming: v }),
       setJobId: (id) => set({ jobId: id }),
+      setExportJobId: (id) => set({ exportJobId: id }),
       mergeSegments: (serverSegs) => set((s) => {
         // Merge server snapshot into the SOURCE transcript without truncating.
         // Source segments are filled by the upload-time whisper pass; the
@@ -758,6 +765,7 @@ export const useStore = create<State & Actions>()(
           isAudioOnly: false,
           subsStreaming: false,
           jobId: null,
+          exportJobId: null,
           watermark: true,
           trimRange: { in_sec: 0, out_sec: 0, loop: false },
           socialPreset: "none" as SocialPreset,
@@ -811,6 +819,8 @@ export const useStore = create<State & Actions>()(
         watermark: s.watermark,
         subsStreaming: s.subsStreaming,
         jobId: s.jobId,
+        // `exportJobId` is deliberately NOT persisted: it points at a job on a
+        // server that this browser can no longer cancel after a reload.
       }),
         version: 10,
         // Historical fields migrate forward:
