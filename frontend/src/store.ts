@@ -725,7 +725,7 @@ export const useStore = create<State & Actions>()(
             : { segments: next, segmentsSource: next };
         }),
       reset: () =>
-        set({
+        set((s) => ({
           videoId: null,
           videoUrl: null,
           duration: 0,
@@ -757,7 +757,12 @@ export const useStore = create<State & Actions>()(
             extraAudioDuration: 0,
             extraVolume: 1.0,
           },
-        }),
+          // A new project always starts from the source frame: return the Canvas
+          // preset to "source". `canvas.mode` and the remaining canvas fields
+          // (crop_anchor / custom / bg_color) are intentionally preserved so a
+          // reset never silently flips an in-progress custom crop.
+          canvas: { ...s.canvas, preset: "source" as AspectPreset },
+        })),
     }),
     {
       name: "cutstorm-state",
