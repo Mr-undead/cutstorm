@@ -107,6 +107,11 @@ export type SubtitleTrack = "source" | "extra";
 type State = {
   videoId: string | null;
   videoUrl: string | null;
+  /** Original filename of the imported media (e.g. "my_video.mp4"). Used by
+   * the Transcript pane to name the downloaded .srt after the source video.
+   * Not persisted — the reload-recovery fetch (App.tsx) restores it from the
+   * backend transcript meta. */
+  originalFilename: string | null;
   duration: number;
   videoW: number;
   videoH: number;
@@ -163,6 +168,7 @@ type State = {
 type Actions = {
   setUploaded: (r: {
     video_id: string;
+    original_filename?: string | null;
     duration: number;
     width: number;
     height: number;
@@ -172,6 +178,7 @@ type Actions = {
   }) => void;
   loadProject: (r: {
     video_id: string;
+    original_filename?: string | null;
     duration: number;
     width: number;
     height: number;
@@ -263,6 +270,7 @@ export const useStore = create<State & Actions>()(
       (set) => ({
       videoId: null,
       videoUrl: null,
+      originalFilename: null,
       duration: 0,
       videoW: 0,
       videoH: 0,
@@ -312,6 +320,9 @@ export const useStore = create<State & Actions>()(
           return {
             videoId: r.video_id,
             videoUrl: r.url,
+            // Remember the source filename so the SRT download can be named
+            // after the imported video (my_video.mp4 → my_video.srt).
+            originalFilename: r.original_filename ?? null,
             duration: r.duration,
             videoW: r.width,
             videoH: r.height,
@@ -351,6 +362,8 @@ export const useStore = create<State & Actions>()(
         return {
           videoId: r.video_id,
           videoUrl: r.url,
+          // Same as setUploaded: keep the source filename for SRT naming.
+          originalFilename: r.original_filename ?? null,
           duration: r.duration,
           videoW: r.width,
           videoH: r.height,
@@ -728,6 +741,7 @@ export const useStore = create<State & Actions>()(
         set((s) => ({
           videoId: null,
           videoUrl: null,
+          originalFilename: null,
           duration: 0,
           videoW: 0,
           videoH: 0,

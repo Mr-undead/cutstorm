@@ -36,6 +36,9 @@ export type TranscribeResult = {
   height: number;
   language?: string | null;
   segments: Segment[];
+  /** Original upload filename (as sent by the backend). Used to derive the
+   * SRT download name. May be null for legacy/URL-imported entries. */
+  original_filename?: string | null;
   is_audio_only?: boolean;
   status?: TranscribeStatus | null;
   percent?: number | null;

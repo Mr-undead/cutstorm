@@ -1,4 +1,4 @@
-import { useStore } from "../store";
+import { useStore, type Segment } from "../store";
 
 function fmtTimestamp(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0;
@@ -6,6 +6,41 @@ function fmtTimestamp(t: number): string {
   const s = Math.floor(t % 60);
   const cs = Math.floor((t - Math.floor(t)) * 100);
   return `${m}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
+}
+
+/** SRT timestamp: HH:MM:SS,mmm — note the COMMA before milliseconds, which is
+ * required by the SubRip spec (players like Premiere/Aegisub reject a dot). */
+function fmtSrtTime(t: number): string {
+  if (!Number.isFinite(t) || t < 0) t = 0;
+  const ms = Math.round(t * 1000);
+  const pad = (n: number, w: number) => n.toString().padStart(w, "0");
+  return (
+    `${pad(Math.floor(ms / 3_600_000), 2)}:` +
+    `${pad(Math.floor((ms % 3_600_000) / 60_000), 2)}:` +
+    `${pad(Math.floor((ms % 60_000) / 1000), 2)},` +
+    `${pad(ms % 1000, 3)}`
+  );
+}
+
+/** Standard SubRip blocks: "N\nstart --> end\ntext", separated by a blank line. */
+function buildSrt(segments: Segment[]): string {
+  if (segments.length === 0) return "";
+  return (
+    segments
+      .map(
+        (seg, i) =>
+          `${i + 1}\n${fmtSrtTime(seg.start)} --> ${fmtSrtTime(seg.end)}\n${seg.text}`,
+      )
+      .join("\n\n") + "\n"
+  );
+}
+
+/** Name the .srt after the imported video (my_video.mp4 → my_video.srt);
+ * falls back to transcript.srt when the original name is unknown. */
+function srtFilename(originalFilename: string | null): string {
+  const stem = (originalFilename ?? "").trim().replace(/\.[^.\\/]+$/, "").trim();
+  const safe = stem.replace(/[\\/:*?"<>|]/g, "_");
+  return `${safe || "transcript"}.srt`;
 }
 
 export function SegmentList() {
@@ -18,6 +53,7 @@ export function SegmentList() {
   const deleteSegment = useStore((s) => s.deleteSegment);
   const currentTime = useStore((s) => s.currentTime);
   const hasVideo = useStore((s) => !!s.videoUrl);
+  const originalFilename = useStore((s) => s.originalFilename);
   const subsStreaming = useStore((s) => s.subsStreaming);
   const extraSubsStreaming = useStore((s) => s.extraSubsStreaming);
   const progressPhase = useStore((s) => s.progressPhase);
@@ -36,10 +72,43 @@ export function SegmentList() {
     subtitleTrack === "extra" ? extraTranscribing : sourceTranscribing;
   const extraAvailable = segmentsExtra.length > 0 || extraSubsStreaming;
 
+  // Pure client-side export: build the SubRip text from the active track and
+  // hand it to the browser via a blob URL. No backend round-trip involved.
+  function downloadSrt() {
+    if (segments.length === 0) return;
+    const blob = new Blob([buildSrt(segments)], {
+      type: "application/x-subrip;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = srtFilename(originalFilename);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="pane scroll" data-testid="segments-panel">
       <div className="pane-header">
-        <h2>Transcript</h2>
+        <div className="pane-header-left">
+          <h2>Transcript</h2>
+          <button
+            type="button"
+            className="srt-download"
+            data-testid="srt-download"
+            disabled={segments.length === 0}
+            onClick={downloadSrt}
+            title={
+              segments.length === 0
+                ? "No transcript segments to download yet"
+                : `Download ${srtFilename(originalFilename)} (SubRip .srt)`
+            }
+          >
+            Subtitle Download
+          </button>
+        </div>
         <span className="topbar-meta">{segments.length}</span>
       </div>
       <div className="subtitle-track-tabs" data-testid="subtitle-track-tabs">

@@ -82,6 +82,7 @@ export function Sidebar({ open, onClose }: Props) {
       const data = await getTranscript(item.video_id);
       loadProject({
         video_id: data.video_id,
+        original_filename: data.original_filename,
         duration: data.duration,
         width: data.width,
         height: data.height,

@@ -864,6 +864,32 @@ label {
   color: var(--fg-muted);
 }
 
+/* Left cluster inside a pane header: keeps an action button next to the
+   title, so the right-side counter (space-between) doesn't move. */
+.pane-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Compact dark-theme action button (Transcript pane → Subtitle Download). */
+.srt-download {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  color: var(--fg-muted);
+}
+
+.srt-download:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-accent);
+  color: var(--fg);
+}
+
 .pane-body {
   padding: 14px 16px;
   display: flex;

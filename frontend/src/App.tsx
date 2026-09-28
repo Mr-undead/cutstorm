@@ -50,6 +50,9 @@ export function App() {
         useStore.getState().setProgress("idle", 0);
         return;
       }
+      // originalFilename is not persisted in localStorage — restore it from
+      // the backend meta so the SRT download stays named after the source.
+      useStore.setState({ originalFilename: meta.original_filename ?? null });
       const status = meta.status ?? null;
       if (status === "done" || status == null) {
         // `null` = legacy meta (pre-status field). Treat as done.
