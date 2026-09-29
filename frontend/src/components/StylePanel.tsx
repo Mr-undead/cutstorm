@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from "react";
 import type { Segment } from "../store";
 import { useStore } from "../store";
 import { FontPicker } from "./FontPicker";
@@ -54,6 +55,33 @@ export function StylePanel() {
   const subsStreaming = useStore((s) => s.subsStreaming);
   const progressPhase = useStore((s) => s.progressPhase);
   const progressPercent = useStore((s) => s.progressPercent);
+
+  // --- Local draft state for custom-crop inputs --------------------------------
+  // The old code used `value={x.toFixed(1)}` which returned a string and
+  // rounded on every keystroke, preventing users from typing multi-digit or
+  // decimal numbers.  Draft values are plain strings the user can type freely;
+  // they are committed to the store only on blur / Enter.
+  const customCrop = canvas.custom;
+  const cropFocused = useRef("");
+  const [draftX, setDraftX] = useState(String(customCrop.x_pct));
+  const [draftY, setDraftY] = useState(String(customCrop.y_pct));
+  const [draftW, setDraftW] = useState(String(customCrop.w_pct));
+  const [draftH, setDraftH] = useState(String(customCrop.h_pct));
+
+  // Sync draft ← store when values change externally (drag / resize / presets)
+  // but skip the field that currently has focus so we don't clobber user input.
+  useEffect(() => {
+    if (cropFocused.current !== "x") setDraftX(String(customCrop.x_pct));
+    if (cropFocused.current !== "y") setDraftY(String(customCrop.y_pct));
+    if (cropFocused.current !== "w") setDraftW(String(customCrop.w_pct));
+    if (cropFocused.current !== "h") setDraftH(String(customCrop.h_pct));
+  }, [customCrop.x_pct, customCrop.y_pct, customCrop.w_pct, customCrop.h_pct]);
+
+  function commitCrop(field: "x_pct" | "y_pct" | "w_pct" | "h_pct", raw: string) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return; // ignore NaN / Infinity
+    setCustomCrop({ [field]: n });
+  }
 
   if (!hasVideo) return null;
 
@@ -216,32 +244,44 @@ export function StylePanel() {
                   <input
                     type="number" min={0} max={100} step={0.5}
                     data-testid="custom-x"
-                    value={canvas.custom.x_pct.toFixed(1)}
-                    onChange={(e) => setCustomCrop({ x_pct: Number(e.target.value) })}
+                    value={draftX}
+                    onChange={(e) => setDraftX(e.target.value)}
+                    onFocus={() => { cropFocused.current = "x"; }}
+                    onBlur={(e) => { cropFocused.current = ""; commitCrop("x_pct", e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                   />
                 </label>
                 <label>Y %
                   <input
                     type="number" min={0} max={100} step={0.5}
                     data-testid="custom-y"
-                    value={canvas.custom.y_pct.toFixed(1)}
-                    onChange={(e) => setCustomCrop({ y_pct: Number(e.target.value) })}
+                    value={draftY}
+                    onChange={(e) => setDraftY(e.target.value)}
+                    onFocus={() => { cropFocused.current = "y"; }}
+                    onBlur={(e) => { cropFocused.current = ""; commitCrop("y_pct", e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                   />
                 </label>
                 <label>W %
                   <input
                     type="number" min={5} max={100} step={0.5}
                     data-testid="custom-w"
-                    value={canvas.custom.w_pct.toFixed(1)}
-                    onChange={(e) => setCustomCrop({ w_pct: Number(e.target.value) })}
+                    value={draftW}
+                    onChange={(e) => setDraftW(e.target.value)}
+                    onFocus={() => { cropFocused.current = "w"; }}
+                    onBlur={(e) => { cropFocused.current = ""; commitCrop("w_pct", e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                   />
                 </label>
                 <label>H %
                   <input
                     type="number" min={5} max={100} step={0.5}
                     data-testid="custom-h"
-                    value={canvas.custom.h_pct.toFixed(1)}
-                    onChange={(e) => setCustomCrop({ h_pct: Number(e.target.value) })}
+                    value={draftH}
+                    onChange={(e) => setDraftH(e.target.value)}
+                    onFocus={() => { cropFocused.current = "h"; }}
+                    onBlur={(e) => { cropFocused.current = ""; commitCrop("h_pct", e.target.value); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                   />
                 </label>
               </div>

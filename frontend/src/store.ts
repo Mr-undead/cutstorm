@@ -697,6 +697,16 @@ export const useStore = create<State & Actions>()(
         if (next.y_pct < 0) next.y_pct = 0;
         if (next.x_pct > 95) next.x_pct = 95;
         if (next.y_pct > 95) next.y_pct = 95;
+        // Skip re-render when nothing actually changed (avoids toFixed fight).
+        const cur = s.canvas.custom;
+        if (
+          cur.x_pct === next.x_pct &&
+          cur.y_pct === next.y_pct &&
+          cur.w_pct === next.w_pct &&
+          cur.h_pct === next.h_pct
+        ) {
+          return {};
+        }
         // A custom crop is a manual canvas change — the social target no longer
         // describes the output frame.
         return { canvas: { ...s.canvas, custom: next }, socialPreset: "none" as SocialPreset };
