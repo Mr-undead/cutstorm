@@ -2462,7 +2462,17 @@ label {
 
 .mobile-preview {
   flex-shrink: 0;
-  max-height: 45vh;
+  /* A DEFINITE height, deliberately not `max-height`. The preview measures its
+     own box to scale the frame (scale = min(boxW / frameW, boxH / frameH)) and
+     the scaled frame IS that box's content. With an auto/max height the box is
+     sized by the frame it is supposed to size, so the measurement is
+     self-referential: once anything squeezed the stage (the Timeline tab did
+     exactly that), every later measurement returned that same squeezed value —
+     scale = min(boxW/frameW, scale) has no way to grow back — and the preview
+     stayed small until a full page refresh reset it to 1. A fixed height makes
+     the box independent of the frame, so the scale is always re-derived from the
+     viewport, whatever the active tab is. */
+  height: 45vh;
   overflow: hidden;
   background: var(--bg);
   border-bottom: 1px solid var(--border);

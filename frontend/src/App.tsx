@@ -162,14 +162,21 @@ export function App() {
         isMobile ? (
           /* ---- Mobile layout ---- */
           <div className="mobile-editor">
-            <div className="mobile-preview">
+            <div className="mobile-preview" data-testid="mobile-preview">
+              {/* `hideTimeline` is unconditional: the Timeline already has its own
+                  bottom tab (rendered in .mobile-panel below), so the preview must
+                  never render it inline. The inline copy squeezed the preview
+                  stage and, combined with the self-referential stage sizing, left
+                  the frame stuck at that smaller scale after leaving the tab.
+                  `layoutKey` re-measures the preview box on every tab switch, so
+                  the frame always matches the current layout. */}
               {isAudioOnly ? (
-                <AudioPreview hideTimeline={mobileTab !== "timeline"} />
+                <AudioPreview hideTimeline layoutKey={mobileTab} />
               ) : (
-                <VideoPreview hideTimeline={mobileTab !== "timeline"} />
+                <VideoPreview hideTimeline layoutKey={mobileTab} />
               )}
             </div>
-            <div className="mobile-panel">
+            <div className="mobile-panel" data-testid="mobile-panel">
               {mobileTab === "style" && <StylePanel />}
               {mobileTab === "subs" && <SegmentList />}
               {mobileTab === "timeline" && <Timeline />}

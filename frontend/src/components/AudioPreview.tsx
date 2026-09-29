@@ -20,7 +20,10 @@ const PRESET_TARGETS: Record<string, [number, number]> = {
   "4:5": [1080, 1350],
 };
 
-export function AudioPreview({ hideTimeline = false }: { hideTimeline?: boolean } = {}) {
+export function AudioPreview({
+  hideTimeline = false,
+  layoutKey = null,
+}: { hideTimeline?: boolean; layoutKey?: string | number | null } = {}) {
   const audioUrl = useStore((s) => s.videoUrl);
   const setCurrentTime = useStore((s) => s.setCurrentTime);
   const setVideoEl = useStore((s) => s.setVideoEl);
@@ -38,11 +41,16 @@ export function AudioPreview({ hideTimeline = false }: { hideTimeline?: boolean 
   const presetKey = canvas.preset === "source" ? "9:16" : canvas.preset;
   const [targetW, targetH] = PRESET_TARGETS[presetKey] ?? [1080, 1920];
 
+  // Same measurement contract as VideoPreview: the ResizeObserver tracks the
+  // stage box, `layoutKey` re-measures when the surrounding layout changes (the
+  // mobile bottom tabs), and a zero-size box is skipped rather than latched as
+  // the 0.01 scale floor.
   useLayoutEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const measure = () => {
       const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return;
       const s = Math.min(r.width / targetW, r.height / targetH);
       setScale(Math.max(0.01, s));
     };
@@ -50,7 +58,7 @@ export function AudioPreview({ hideTimeline = false }: { hideTimeline?: boolean 
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [targetW, targetH]);
+  }, [targetW, targetH, layoutKey]);
 
   useEffect(() => {
     if (audioRef.current && audioUrl) {

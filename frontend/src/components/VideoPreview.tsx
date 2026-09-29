@@ -18,7 +18,10 @@ import { SubtitleOverlay } from "./SubtitleOverlay";
 import { Watermark } from "./Watermark";
 import { Timeline } from "./Timeline";
 
-export function VideoPreview({ hideTimeline = false }: { hideTimeline?: boolean } = {}) {
+export function VideoPreview({
+  hideTimeline = false,
+  layoutKey = null,
+}: { hideTimeline?: boolean; layoutKey?: string | number | null } = {}) {
   const videoUrl = useStore((s) => s.videoUrl);
   const setCurrentTime = useStore((s) => s.setCurrentTime);
   const setVideoEl = useStore((s) => s.setVideoEl);
@@ -55,11 +58,22 @@ export function VideoPreview({ hideTimeline = false }: { hideTimeline?: boolean 
   // back to None / another target. Never touches crop, canvas or export.
   const showReelsGuide = socialPreset === "instagram-reels" && reelsGuide;
 
+  // Fit the (unscaled) output frame inside the available stage box. The
+  // ResizeObserver covers the box shrinking/growing on its own; `layoutKey` is
+  // the extra "the layout around me just changed" signal (the mobile bottom
+  // tabs), so a tab switch always re-runs the measurement even when the browser
+  // reports no resize for the stage itself.
   useLayoutEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const measure = () => {
       const r = el.getBoundingClientRect();
+      // Skip a collapsed / not-yet-laid-out box instead of dividing by it: a 0
+      // would collapse the frame to the 0.01 floor and, since the scaled frame
+      // is the box's own content, that degenerate scale would then be a stable
+      // fixed point. Keeping the last good scale lets the ResizeObserver apply
+      // the real value as soon as the box has a size again.
+      if (r.width <= 0 || r.height <= 0) return;
       const s = Math.min(r.width / frameW, r.height / frameH);
       setScale(Math.max(0.01, s));
     };
@@ -67,7 +81,7 @@ export function VideoPreview({ hideTimeline = false }: { hideTimeline?: boolean 
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [frameW, frameH]);
+  }, [frameW, frameH, layoutKey]);
 
   useEffect(() => {
     if (videoRef.current && videoUrl) {
