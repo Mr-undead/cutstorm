@@ -310,70 +310,7 @@ label {
   font-size: 15px;
 }
 
-.url-import {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
-.url-import-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  letter-spacing: 0.02em;
-}
-
-.url-import-row-input {
-  display: flex;
-  gap: 8px;
-}
-
-.url-import-input {
-  flex: 1;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm, 8px);
-  border: 1px solid var(--border-accent);
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--fg, #fff);
-  font-size: 14px;
-  outline: none;
-}
-
-.url-import-input:focus {
-  border-color: var(--accent);
-}
-
-.url-import-input:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.url-import-btn {
-  padding: 10px 18px;
-  border-radius: var(--radius-sm, 8px);
-  border: none;
-  background: var(--accent-gradient);
-  color: #fff;
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.url-import-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.url-import-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.url-import-hint {
-  font-size: 11px;
-  color: var(--fg-dim, #888);
-}
 
 .font-select {
   position: relative;
@@ -537,14 +474,7 @@ label {
   cursor: not-allowed;
 }
 
-.url-import-sep {
-  font-size: 11px;
-  color: var(--fg-dim, #666);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  margin: -4px 0;
-  opacity: 0.6;
-}
+
 
 .dropzone {
   width: 100%;
@@ -934,13 +864,16 @@ label {
   box-shadow: var(--shadow-lg);
   max-width: 100%;
   max-height: 100%;
-  display: inline-flex;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .preview-frame video {
   display: block;
   max-width: 100%;
   max-height: 100%;
+  object-fit: contain;
   background: #000;
 }
 

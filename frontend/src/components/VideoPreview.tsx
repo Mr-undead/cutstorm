@@ -53,6 +53,21 @@ export function VideoPreview({
   const frameW = canvas.mode === "custom" ? (videoW || resolved.targetW) : resolved.targetW;
   const frameH = canvas.mode === "custom" ? (videoH || resolved.targetH) : resolved.targetH;
 
+  // For "source" preset, normalize frame dimensions to prevent huge CSS pixel
+  // values (e.g. 3840×2160 for 4K) from overflowing mobile containers. The
+  // aspect ratio is preserved so the scale calculation stays correct.
+  const sourceNorm =
+    canvas.mode !== "custom" &&
+    canvas.preset === "source" &&
+    resolved.targetW > 0 &&
+    resolved.targetH > 0
+      ? Math.min(1, 1920 / Math.max(resolved.targetW, resolved.targetH))
+      : 1;
+  const previewW =
+    canvas.mode === "custom" ? frameW : Math.round(frameW * sourceNorm);
+  const previewH =
+    canvas.mode === "custom" ? frameH : Math.round(frameH * sourceNorm);
+
   // Reels UI guide: preview-only overlay. It only exists while the Instagram
   // Reels social preset is active, so it can never linger once the user goes
   // back to None / another target. Never touches crop, canvas or export.
@@ -74,14 +89,19 @@ export function VideoPreview({
       // fixed point. Keeping the last good scale lets the ResizeObserver apply
       // the real value as soon as the box has a size again.
       if (r.width <= 0 || r.height <= 0) return;
-      const s = Math.min(r.width / frameW, r.height / frameH);
+      // Fill the available width so the frame never leaves black bars on the
+      // sides.  On mobile the stage height is fixed (45 dvh) and would
+      // otherwise force a smaller scale that clips the frame horizontally.
+      // Vertical overflow is clipped by the parent .mobile-preview container
+      // (overflow: hidden) when it exceeds the stage.
+      const s = r.width / previewW;
       setScale(Math.max(0.01, s));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [frameW, frameH, layoutKey]);
+  }, [previewW, previewH, layoutKey]);
 
   useEffect(() => {
     if (videoRef.current && videoUrl) {
@@ -214,8 +234,8 @@ export function VideoPreview({
       <div className="preview-stage" ref={stageRef}>
         <div
           style={{
-            width: frameW * scale + "px",
-            height: frameH * scale + "px",
+            width: previewW * scale + "px",
+            height: previewH * scale + "px",
             position: "relative",
           }}
         >
@@ -224,8 +244,8 @@ export function VideoPreview({
             data-testid="preview-wrap"
             data-canvas-mode={canvas.mode}
             style={{
-              width: frameW + "px",
-              height: frameH + "px",
+              width: previewW + "px",
+              height: previewH + "px",
               maxWidth: "none",
               maxHeight: "none",
               transform: `scale(${scale})`,
@@ -242,8 +262,10 @@ export function VideoPreview({
               data-testid="preview-video"
               style={{
                 width: "100%",
-                height: "100%",
-                objectFit: resolved.sourceFit,
+                height: "auto",
+                maxWidth: "100%",
+                maxHeight: "100%",
+                objectFit: "contain",
                 objectPosition: resolved.sourceObjectPosition,
                 background: canvas.bg_color,
               }}

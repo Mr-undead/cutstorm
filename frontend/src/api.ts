@@ -100,42 +100,7 @@ export async function uploadVideo(
   });
 }
 
-export async function fetchVideoFromUrl(
-  url: string,
-  opts: {
-    language?: string;
-    model?: string;
-    generateSubs?: boolean;
-    jobId?: string;
-    signal?: AbortSignal;
-  } = {},
-): Promise<TranscribeResult> {
-  const endpoint = opts.jobId
-    ? `${API_BASE}/api/fetch-url?job_id=${encodeURIComponent(opts.jobId)}`
-    : `${API_BASE}/api/fetch-url`;
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      url,
-      language: opts.language,
-      model: opts.model,
-      generate_subs: opts.generateSubs !== false,
-    }),
-    signal: opts.signal,
-  });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const j = await res.json();
-      detail = j?.detail ?? "";
-    } catch {
-      detail = await res.text();
-    }
-    throw new Error(detail || `fetch-url failed: ${res.status}`);
-  }
-  return res.json();
-}
+
 
 export function videoUrl(videoId: string): string {
   return `${API_BASE}/api/video/${videoId}`;
@@ -417,19 +382,7 @@ export async function deleteTranscript(
   if (!res.ok) throw new Error(`delete failed: ${res.status}`);
 }
 
-export async function cancelFetchUrl(jobId: string): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `${API_BASE}/api/fetch-url/${encodeURIComponent(jobId)}/cancel`,
-      { method: "POST", signal: AbortSignal.timeout(2000) },
-    );
-    if (!res.ok) return false;
-    const body = await res.json();
-    return !!body.cancelled;
-  } catch {
-    return false;
-  }
-}
+
 
 export async function cancelTranscribe(videoId: string): Promise<boolean> {
   try {
