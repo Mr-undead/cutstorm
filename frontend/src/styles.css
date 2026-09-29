@@ -2449,3 +2449,140 @@ label {
 .clip-remove-button:hover {
   opacity: 1;
 }
+
+/* ---------- mobile bottom-tab layout ---------- */
+
+.mobile-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobile-preview {
+  flex-shrink: 0;
+  max-height: 45vh;
+  overflow: hidden;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Let the video pane fill its mobile-preview container instead of
+   using the desktop grid layout's sizing. */
+.mobile-preview .pane.preview-pane {
+  height: 100%;
+}
+
+.mobile-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* The panel components (StylePanel, SegmentList, etc.) render their own
+   .pane wrapper.  Inside mobile-panel we remove the overflow:hidden that
+   .pane normally applies so scrolling works. */
+.mobile-panel > .pane {
+  overflow: visible;
+  min-height: 100%;
+}
+
+.mobile-panel > .pane.scroll {
+  overflow-y: auto;
+}
+
+/* ---- Bottom navigation bar ---- */
+
+.mobile-nav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  z-index: 15;
+}
+
+.mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 0 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  border: 0;
+  border-radius: 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav-btn:active {
+  transform: none;
+}
+
+.mobile-nav-btn.active {
+  color: var(--accent);
+}
+
+.mobile-nav-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* ---- Inline label helper for ExportPanel ---- */
+
+.inline-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+.inline-label select {
+  flex: 0 0 auto;
+}
+
+/* ---- Compact topbar for mobile ---- */
+
+@media (max-width: 767px) {
+  .topbar {
+    padding: 8px 12px;
+  }
+
+  .topbar-meta {
+    display: none;
+  }
+
+  .brand-logo {
+    height: 22px;
+  }
+
+  .topbar-right {
+    gap: 6px;
+  }
+
+  /* Hide the export group in TopBar on mobile — Export is in the bottom tab */
+  .topbar-right .export-group {
+    display: none;
+  }
+
+  /* Toast should not overlap bottom nav on mobile */
+  .toast {
+    bottom: 64px;
+    right: 12px;
+    left: 12px;
+    max-width: none;
+  }
+}
+

@@ -18,7 +18,7 @@ import { SubtitleOverlay } from "./SubtitleOverlay";
 import { Watermark } from "./Watermark";
 import { Timeline } from "./Timeline";
 
-export function VideoPreview() {
+export function VideoPreview({ hideTimeline = false }: { hideTimeline?: boolean } = {}) {
   const videoUrl = useStore((s) => s.videoUrl);
   const setCurrentTime = useStore((s) => s.setCurrentTime);
   const setVideoEl = useStore((s) => s.setVideoEl);
@@ -253,7 +253,7 @@ export function VideoPreview() {
         </div>
       </div>
       <PreviewToolbar />
-      <Timeline />
+      {!hideTimeline && <Timeline />}
     </div>
   );
 }

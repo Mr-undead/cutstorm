@@ -20,7 +20,7 @@ const PRESET_TARGETS: Record<string, [number, number]> = {
   "4:5": [1080, 1350],
 };
 
-export function AudioPreview() {
+export function AudioPreview({ hideTimeline = false }: { hideTimeline?: boolean } = {}) {
   const audioUrl = useStore((s) => s.videoUrl);
   const setCurrentTime = useStore((s) => s.setCurrentTime);
   const setVideoEl = useStore((s) => s.setVideoEl);
@@ -146,7 +146,7 @@ export function AudioPreview() {
         </div>
       </div>
       <PreviewToolbar />
-      <Timeline />
+      {!hideTimeline && <Timeline />}
     </div>
   );
 }

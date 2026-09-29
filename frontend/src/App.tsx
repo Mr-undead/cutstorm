@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { getTranscript } from "./api";
 import { AudioPreview } from "./components/AudioPreview";
+import { MobileNav, type MobileTab } from "./components/MobileNav";
+import { ExportPanel } from "./components/ExportPanel";
 import { ProgressBar } from "./components/ProgressBar";
 import { RenderPage } from "./components/RenderPage";
 import { Sidebar } from "./components/Sidebar";
+import { Timeline } from "./components/Timeline";
 import { Uploader } from "./components/Uploader";
 import { SegmentList } from "./components/SegmentList";
 import { StylePanel } from "./components/StylePanel";
@@ -26,7 +29,20 @@ export function App() {
   const hasVideo = useStore((s) => !!s.videoUrl);
   const isAudioOnly = useStore((s) => s.isAudioOnly);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mobileTab, setMobileTab] = useState<MobileTab>("style");
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768,
+  );
   useHotkeys();
+
+  // Listen for viewport width changes to toggle mobile layout.
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    setIsMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   // One-shot recovery after page reload. Backend meta.json is the source of
   // truth — we ignore the persisted subsStreaming flag and always ask the
@@ -138,16 +154,37 @@ export function App() {
   }, []);
 
   return (
-    <div className="shell">
+    <div className={`shell${isMobile ? " shell-mobile" : ""}`}>
       <TopBar onOpenSidebar={() => setSidebarOpen(true)} />
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       {hasVideo ? (
-        <div className="editor">
-          <StylePanel />
-          {isAudioOnly ? <AudioPreview /> : <VideoPreview />}
-          <SegmentList />
-        </div>
+        isMobile ? (
+          /* ---- Mobile layout ---- */
+          <div className="mobile-editor">
+            <div className="mobile-preview">
+              {isAudioOnly ? (
+                <AudioPreview hideTimeline={mobileTab !== "timeline"} />
+              ) : (
+                <VideoPreview hideTimeline={mobileTab !== "timeline"} />
+              )}
+            </div>
+            <div className="mobile-panel">
+              {mobileTab === "style" && <StylePanel />}
+              {mobileTab === "subs" && <SegmentList />}
+              {mobileTab === "timeline" && <Timeline />}
+              {mobileTab === "export" && <ExportPanel />}
+            </div>
+            <MobileNav active={mobileTab} onChange={setMobileTab} />
+          </div>
+        ) : (
+          /* ---- Desktop layout (unchanged) ---- */
+          <div className="editor">
+            <StylePanel />
+            {isAudioOnly ? <AudioPreview /> : <VideoPreview />}
+            <SegmentList />
+          </div>
+        )
       ) : (
         <Uploader />
       )}
