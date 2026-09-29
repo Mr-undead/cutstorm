@@ -623,20 +623,41 @@ export const useStore = create<State & Actions>()(
           ...(manualCanvasChange ? { socialPreset: "none" as SocialPreset } : {}),
         };
       }),
-      setSocialPreset: (preset) => set((s) =>
-        // Applying Instagram Reels snaps the Canvas PRESET to 9:16, atomically
-        // in a single set — so the manual-canvas-change reset above never fires
-        // for this operation and clobber the preset we just picked.
-        // `canvas.mode` is deliberately left untouched: forcing it back to
-        // "preset" would unmount CropEditor, throwing away an in-progress
-        // custom crop / reframe (the interactive frame on the preview).
-        preset === "instagram-reels"
-          ? {
+      setSocialPreset: (preset) =>
+        set((s) => {
+          // Applying Instagram Reels snaps the Canvas PRESET to 9:16, atomically
+          // in a single set — so the manual-canvas-change reset above never fires
+          // for this operation and clobber the preset we just picked.
+          // `canvas.mode` is deliberately left untouched: forcing it back to
+          // "preset" would unmount CropEditor, throwing away an in-progress
+          // custom crop / reframe (the interactive frame on the preview).
+          if (preset === "instagram-reels") {
+            return {
               socialPreset: preset,
               canvas: { ...s.canvas, preset: "9:16" as AspectPreset },
-            }
-          : { socialPreset: preset },
-      ),
+            };
+          }
+
+          // "None" is the exact inverse of Reels: dropping the social target
+          // must also release the Canvas back to "source" (the original video's
+          // own dimensions) instead of leaving the Reels-driven 9:16 frame
+          // behind. Symmetric with the branch above, and done in one set so the
+          // aspect ratio never flickers.
+          // `canvas.mode` is still left untouched, for the same CropEditor
+          // reason: a custom reframe in progress is kept, and the "source"
+          // aspect ratio is simply what shows up when the user returns to
+          // Preset mode.
+          // Audio-only projects are exempt — they have no source frame ("source"
+          // isn't even offered in their preset list and resolves to 9:16), so
+          // their canvas must keep the chromakey target the user picked.
+          return {
+            socialPreset: preset,
+            canvas:
+              !s.isAudioOnly && s.canvas.preset !== "source"
+                ? { ...s.canvas, preset: "source" as AspectPreset }
+                : s.canvas,
+          };
+        }),
       // Preview-only viewing aid (Reels UI safe-area guide). Deliberately NOT
       // part of the undo history (zundo partialize) — it changes nothing in
       // the exported video.

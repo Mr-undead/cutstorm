@@ -4,6 +4,8 @@
  * Covers:
  * - default `socialPreset === "none"`
  * - picking Instagram Reels → socialPreset="instagram-reels" + canvas 9:16
+ * - clearing the social preset to "None" → canvas aspect ratio resets to
+ *   "source" (the Reels-driven 9:16 frame does not linger)
  * - Instagram Reels keeps `canvas.mode` as-is, so an in-progress Custom crop
  *   (the interactive CropEditor frame) is not unmounted
  * - manually changing the Canvas away from 9:16 → socialPreset resets to "none"
@@ -49,6 +51,78 @@ test("Instagram Reels sets socialPreset + canvas 9:16, and canvas stays editable
   // Canvas controls are NOT disabled/hidden by the social preset.
   await expect(page.getByTestId("canvas-preset-16:9")).toBeEnabled();
   await expect(page.getByTestId("canvas-mode-custom")).toBeEnabled();
+});
+
+test("Social Preset → None resets the canvas aspect ratio back to Source", async ({ page }) => {
+  await openEditorWithVideo(page);
+
+  await page.getByTestId("social-preset-instagram-reels").click();
+  await expect(page.getByTestId("canvas-preset-9:16")).toHaveClass(/active/);
+
+  await page.getByTestId("social-preset-none").click();
+
+  // The social target is dropped AND the Reels-driven 9:16 frame goes away —
+  // the canvas falls back to the original video's own dimensions.
+  await expect(page.getByTestId("social-preset-none")).toHaveClass(/active/);
+  await expect(page.getByTestId("social-preset-instagram-reels")).not.toHaveClass(/active/);
+  await expect(page.getByTestId("canvas-preset-source")).toHaveClass(/active/);
+  await expect(page.getByTestId("canvas-preset-9:16")).not.toHaveClass(/active/);
+
+  const state = await page.evaluate(() => {
+    const raw = localStorage.getItem("cutstorm-state");
+    return raw ? JSON.parse(raw).state : null;
+  });
+  expect(state?.socialPreset).toBe("none");
+  expect(state?.canvas?.preset).toBe("source");
+  // The mode is untouched — only the aspect ratio is reset.
+  expect(state?.canvas?.mode).toBe("preset");
+});
+
+test("Social Preset → None keeps a Custom crop in progress but resets the aspect ratio", async ({
+  page,
+}) => {
+  await openEditorWithVideo(page);
+
+  await page.getByTestId("canvas-mode-custom").click();
+  await expect(page.getByTestId("crop-editor")).toBeVisible();
+
+  const frame = page.getByTestId("crop-rect");
+  const beforeDrag = await frame.boundingBox();
+  if (!beforeDrag) throw new Error("no crop-rect bbox");
+  await page.mouse.move(beforeDrag.x + beforeDrag.width / 2, beforeDrag.y + beforeDrag.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeDrag.x + beforeDrag.width / 2 - 40, beforeDrag.y + beforeDrag.height / 2 - 30, {
+    steps: 5,
+  });
+  await page.mouse.up();
+  const afterDrag = await frame.boundingBox();
+  if (!afterDrag) throw new Error("no crop-rect bbox after drag");
+
+  await page.getByTestId("social-preset-instagram-reels").click();
+  await page.getByTestId("social-preset-none").click();
+
+  // Same rule as Reels: the canvas MODE is never forced, so the interactive
+  // reframe frame stays mounted with its geometry — only the aspect ratio resets.
+  await expect(page.getByTestId("canvas-mode-custom")).toHaveClass(/active/);
+  await expect(page.getByTestId("preview-wrap")).toHaveAttribute("data-canvas-mode", "custom");
+  await expect(page.getByTestId("crop-editor")).toBeVisible();
+
+  const afterNone = await frame.boundingBox();
+  if (!afterNone) throw new Error("no crop-rect bbox after social preset None");
+  expect(Math.abs(afterNone.x - afterDrag.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(afterNone.y - afterDrag.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(afterNone.width - afterDrag.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(afterNone.height - afterDrag.height)).toBeLessThanOrEqual(1);
+
+  const state = await page.evaluate(() => {
+    const raw = localStorage.getItem("cutstorm-state");
+    return raw ? JSON.parse(raw).state : null;
+  });
+  expect(state?.socialPreset).toBe("none");
+  expect(state?.canvas?.preset).toBe("source");
+  // Back in Preset mode the reset aspect ratio is what is selected.
+  await page.getByTestId("canvas-mode-preset").click();
+  await expect(page.getByTestId("canvas-preset-source")).toHaveClass(/active/);
 });
 
 test("manually changing the canvas preset resets the social preset to None", async ({
