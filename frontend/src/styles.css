@@ -218,6 +218,7 @@ label {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -2457,6 +2458,7 @@ label {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
   overflow: hidden;
 }
 
@@ -2470,9 +2472,10 @@ label {
      exactly that), every later measurement returned that same squeezed value —
      scale = min(boxW/frameW, scale) has no way to grow back — and the preview
      stayed small until a full page refresh reset it to 1. A fixed height makes
-     the box independent of the frame, so the scale is always re-derived from the
-     viewport, whatever the active tab is. */
+     the box independent of the frame, so the scale is always re-derived from
+     the viewport, whatever the active tab is. */
   height: 45vh;
+  height: 45dvh;
   overflow: hidden;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -2489,6 +2492,7 @@ label {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
 }
 
 /* The panel components (StylePanel, SegmentList, etc.) render their own
@@ -2513,6 +2517,10 @@ label {
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom, 0);
   z-index: 15;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
 }
 
 .mobile-nav-btn {

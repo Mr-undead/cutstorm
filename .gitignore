@@ -44,3 +44,5 @@ frontend/e2e/fixtures/
 
 *.bak
 *.bak-*
+
+*.tsbuildinfo
