@@ -246,7 +246,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
   const isDone = exportState.status === "done";
   return (
     <div className="modal-overlay" data-testid="export-modal">
-      <div className="modal-content export-modal">
+      <div className="modal-content export-modal w-full">
         <div className="modal-header">
           <h2>Export</h2>
           <button
@@ -419,21 +419,48 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
 
         {/* Done */}
         {isDone && (
-          <div className="export-done" data-testid="export-done">
-            <p>Export complete!</p>
-            {exportState.downloadUrl && (
-              <a
-                className="primary"
-                href={exportState.downloadUrl}
-                download
-                data-testid="export-download-link"
+          <div 
+            data-testid="export-done" 
+            style={{ 
+              width: "100%", 
+              padding: "24px", 
+              boxSizing: "border-box", 
+              display: "flex", 
+              flexDirection: "column" 
+            }}
+          >
+            <p style={{ margin: "0 0 32px 0", textAlign: "left", fontSize: "16px", color: "#fff" }}>
+              Export complete!
+            </p>
+            <div 
+              style={{ 
+                display: "flex", 
+                flexDirection: "row", 
+                justifyContent: "space-between", 
+                alignItems: "center", 
+                width: "100%" 
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center" }}>
+                {exportState.downloadUrl && (
+                  <a 
+                    className="primary" 
+                    href={exportState.downloadUrl} 
+                    download 
+                    data-testid="export-download-link"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
+              <button 
+                className="secondary" 
+                onClick={resetAndClose}
+                style={{ marginLeft: "auto" }}
               >
-                Download
-              </a>
-            )}
-            <button className="secondary" onClick={resetAndClose}>
-              Close
-            </button>
+                Close
+              </button>
+            </div>
           </div>
         )}
 
