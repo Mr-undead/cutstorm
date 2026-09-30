@@ -43,8 +43,7 @@ export function StylePanel() {
   const setCustomCrop = useStore((s) => s.setCustomCrop);
   const socialPreset = useStore((s) => s.socialPreset);
   const setSocialPreset = useStore((s) => s.setSocialPreset);
-  const reelsGuide = useStore((s) => s.reelsGuide);
-  const setReelsGuide = useStore((s) => s.setReelsGuide);
+
   const isAudioOnly = useStore((s) => s.isAudioOnly);
   const videoW = useStore((s) => s.videoW);
   const videoH = useStore((s) => s.videoH);
@@ -128,36 +127,6 @@ export function StylePanel() {
               Instagram Reels
             </button>
           </div>
-          {socialPreset === "instagram-reels" && !isAudioOnly && (
-            <>
-              <label>
-                Reels UI Guide
-                <div className="pill-group" data-testid="reels-guide-group">
-                  <button
-                    type="button"
-                    className={!reelsGuide ? "active" : ""}
-                    onClick={() => setReelsGuide(false)}
-                    data-testid="reels-guide-off"
-                  >
-                    Off
-                  </button>
-                  <button
-                    type="button"
-                    className={reelsGuide ? "active" : ""}
-                    onClick={() => setReelsGuide(true)}
-                    data-testid="reels-guide-on"
-                  >
-                    On
-                  </button>
-                </div>
-              </label>
-              <div className="section-hint" data-testid="reels-guide-hint">
-                Suggested layout reference for the Reels app UI — a visual aid
-                only, not an official requirement for organic Reels. Preview
-                only: never changes your crop or the exported video.
-              </div>
-            </>
-          )}
         </div>
 
         <div className="section-title">Canvas {isAudioOnly ? "(audio + chromakey)" : ""}</div>
