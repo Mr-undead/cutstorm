@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -433,6 +434,10 @@ def _ass_path(video_id: str) -> Path:
 # without waiting for asyncio.CancelledError to propagate through the thread
 # pool — transcribe_stream polls the flag between segments.
 _transcribe_tasks: dict[str, tuple[asyncio.Task, dict]] = {}
+
+# In-flight export jobs keyed by job_id. Each entry holds status, progress,
+# and optional error message for the GET /api/export/{job_id}/status endpoint.
+EXPORT_JOBS: dict[str, dict] = {}
 
 
 def _cancel_transcribes(except_video_id: str | None = None) -> None:
@@ -1589,8 +1594,9 @@ async def api_export(
     x_job_id: str | None = Header(default=None),
 ) -> ExportResponse:
     _validate_video_id(req.video_id)
-    jid = job_id or x_job_id
-    t0 = time.perf_counter()
+    jid = job_id or x_job_id or str(uuid.uuid4())
+    # Track export job status for GET /api/export/{job_id}/status
+    EXPORT_JOBS[jid] = {"status": "rendering", "progress": 0, "error": None}
     # Cancellation key mirrors the `/api/export/{job_id}/cancel` path so the
     # Stop button only needs the job id. Falls back to the request shape when
     # the client didn't send one (e.g. curl / tests), which keeps the export
@@ -1609,183 +1615,228 @@ async def api_export(
         req.audio.extra_audio_id,
         jid,
     )
-    media = _find_media_file(req.video_id)
-    if media is None:
-        log.warning("export.404 video_id=%s not found on disk", req.video_id)
-        raise HTTPException(status_code=404, detail="video not found")
-    info = probe(media)
 
-    # Audio-only cannot use "source" preset (no aspect to preserve); default to 9:16.
-    canvas_cfg = req.canvas
-    if info.is_audio_only and canvas_cfg.preset == "source":
-        canvas_cfg = canvas_cfg.model_copy(update={"preset": "9:16"})
-    resolved = canvas_mod.resolve(canvas_cfg, info.width, info.height)
+    # Start the export in a background task and return immediately
+    asyncio.create_task(_run_export_worker(jid, req, cancel_key))
 
-    # ---- trim in/out edges ----
-    trim_in = max(0.0, float(req.trim.in_sec))
-    trim_out_raw = float(req.trim.out_sec)
-    trim_out = info.duration if trim_out_raw <= 0.0 else min(trim_out_raw, info.duration)
-    if trim_in >= trim_out:
-        trim_in = 0.0
-        trim_out = info.duration
-    edge_trim_active = (trim_in > 0.01) or (trim_out < info.duration - 0.01)
-    clipped_duration = trim_out - trim_in
+    return ExportResponse(
+        job_id=jid,
+        video_id=req.video_id,
+        output_path="",
+        output_format=req.format,
+        clip_index=req.clip_index,
+        original_duration=0.0,
+        output_duration=0.0,
+        cuts=None,
+    )
 
-    segments_for_render = req.segments
-    # Extra-track subtitles ride the master extra-audio timeline; they are
-    # NOT clipped to the source video's trim window (their timestamps refer
-    # to the extra audio, not to the original video).
-    if edge_trim_active and req.subtitle_track != "extra":
-        segments_for_render = _clip_segments_to_trim(req.segments, trim_in, trim_out)
+async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
+    t0 = time.perf_counter()
+    try:
+        _validate_video_id(req.video_id)
+        media = _find_media_file(req.video_id)
+        if media is None:
+            log.warning("export.404 video_id=%s not found on disk", req.video_id)
+            EXPORT_JOBS[jid] = {"status": "error", "progress": 0, "error": "video not found"}
+            return
+        info = probe(media)
 
-    keeps: list[tuple[float, float]] | None = None
-    new_duration = clipped_duration
-    if req.trim_silences:
-        keeps = silence.cuts_from_words(
-            segments_for_render,
-            threshold_sec=req.silence_threshold_sec,
-            padding_sec=req.silence_padding_sec,
-            total_duration=clipped_duration,
-        )
-        segments_for_render = silence.retime_segments(segments_for_render, keeps)
-        new_duration = silence.kept_duration(keeps)
-        log.info(
-            "export.trim keeps=%d new_duration=%.2fs (from %.2fs)",
-            len(keeps),
-            new_duration,
-            clipped_duration,
-        )
+        # Audio-only cannot use "source" preset (no aspect to preserve); default to 9:16.
+        canvas_cfg = req.canvas
+        if info.is_audio_only and canvas_cfg.preset == "source":
+            canvas_cfg = canvas_cfg.model_copy(update={"preset": "9:16"})
+        resolved = canvas_mod.resolve(canvas_cfg, info.width, info.height)
 
-    # ---- resolve extra audio (optional) ----
-    extra_audio_path: Path | None = None
-    if req.audio.extra_audio_id:
-        extra_audio_path = _find_extra_audio(req.audio.extra_audio_id)
-        if extra_audio_path is None:
-            # Hard-fail when the user explicitly relies on the track for
-            # loop-mode duration; soft-warn when it's just a mix that we can
-            # render without (so the export still produces something usable).
-            if req.trim.loop:
-                log.warning(
-                    "export.extra_audio_missing id=%s loop=true — refusing export",
-                    req.audio.extra_audio_id,
-                )
-                raise HTTPException(
-                    status_code=410,
-                    detail=(
-                        "Extra audio track is missing on the server "
-                        "(file was cleaned up). Re-upload it before "
-                        "exporting in loop mode."
-                    ),
-                )
-            log.warning("export.extra_audio_missing id=%s — proceeding without mix", req.audio.extra_audio_id)
+        # ---- trim in/out edges ----
+        trim_in = max(0.0, float(req.trim.in_sec))
+        trim_out_raw = float(req.trim.out_sec)
+        trim_out = info.duration if trim_out_raw <= 0.0 else min(trim_out_raw, info.duration)
+        if trim_in >= trim_out:
+            trim_in = 0.0
+            trim_out = info.duration
+        edge_trim_active = (trim_in > 0.01) or (trim_out < info.duration - 0.01)
+        clipped_duration = trim_out - trim_in
 
-    # ---- loop mode (Coub-style): repeat the trimmed slice across the extra
-    # audio's full duration. Only active when both sides agree.
-    loop_active = bool(req.trim.loop) and extra_audio_path is not None and not info.is_audio_only
-    loop_total_duration: float | None = None
-    if loop_active:
-        try:
-            extra_info = probe(extra_audio_path)
-            extra_dur = float(extra_info.duration)
-        except Exception as exc:
-            log.warning("export.loop_probe_failed extra=%s err=%s", extra_audio_path, exc)
-            extra_dur = 0.0
-        if extra_dur > 0:
-            loop_clip_duration = clipped_duration  # short slice
-            loop_total_duration = extra_dur
-            new_duration = extra_dur
-            # Source-track subtitles: stamp copies onto each iteration so each
-            # loop displays them. Extra-track subtitles already ride the
-            # master extra-audio timeline and need no expansion.
-            if req.subtitle_track == "source":
-                from .loop_segments import expand_loop_segments
-                segments_for_render = expand_loop_segments(
-                    segments_for_render,
-                    trim_in=trim_in,
-                    loop_clip_duration=loop_clip_duration,
-                    total_duration=loop_total_duration,
-                )
-            log.info(
-                "export.loop active clip=%.2fs total=%.2fs subtitle_track=%s",
-                loop_clip_duration, loop_total_duration, req.subtitle_track,
+        segments_for_render = req.segments
+        # Extra-track subtitles ride the master extra-audio timeline; they are
+        # NOT clipped to the source video's trim window (their timestamps refer
+        # to the extra audio, not to the original video).
+        if edge_trim_active and req.subtitle_track != "extra":
+            segments_for_render = _clip_segments_to_trim(req.segments, trim_in, trim_out)
+
+        keeps: list[tuple[float, float]] | None = None
+        new_duration = clipped_duration
+        if req.trim_silences:
+            keeps = silence.cuts_from_words(
+                segments_for_render,
+                threshold_sec=req.silence_threshold_sec,
+                padding_sec=req.silence_padding_sec,
+                total_duration=clipped_duration,
             )
-        else:
-            loop_active = False  # bail out, treat as normal export
+            segments_for_render = silence.retime_segments(segments_for_render, keeps)
+            new_duration = silence.kept_duration(keeps)
+            log.info(
+                "export.trim keeps=%d new_duration=%.2fs (from %.2fs)",
+                len(keeps),
+                new_duration,
+                clipped_duration,
+            )
 
-    log.info(
-        "export.render start target=%dx%d audio_only=%s duration=%.2fs trim_edges=(%.2f,%.2f) extra_audio=%s loop=%s",
-        resolved.target_w, resolved.target_h, info.is_audio_only, new_duration,
-        trim_in, trim_out, extra_audio_path, loop_active,
-    )
-
-    out = _output_path(req.video_id, req.clip_index)
-    last_pct = -10
-
-    def on_progress(pct: int) -> None:
-        nonlocal last_pct
-        if pct >= last_pct + 5 or pct == 100:
-            log.info("export.render percent=%d", pct)
-            last_pct = pct
-        ws.push(jid, {"phase": "encode", "percent": pct, "video_id": req.video_id})
-
-    ws.push(jid, {"phase": "encode", "percent": 0, "video_id": req.video_id})
-
-    select_expr = silence.build_select_expr(keeps) if keeps is not None else None
-
-    has_overlay = any(
-        (s.text or "").strip() for s in segments_for_render
-    )
-    trim_active = keeps is not None
-    canvas_transform = bool(resolved.ffmpeg_filter)
-    audio_mix_active = (
-        extra_audio_path is not None or abs(req.audio.source_volume - 1.0) > 1e-3
-    )
-
-    trim_duration_arg = clipped_duration if edge_trim_active else None
-
-    # Watermark PNG is bundled into the Vite build output, so it lives
-    # alongside other static assets after `docker compose up --build`.
-    watermark_path = (STATIC_DIR / "watermark.png") if req.watermark else None
-    if watermark_path is not None and not watermark_path.exists():
-        log.warning("export.watermark_missing path=%s — exporting without it", watermark_path)
-        watermark_path = None
-    wm_active = watermark_path is not None
-
-    # In loop mode we always need a filter pass — no stream_copy can repeat
-    # frames. Trim_duration_arg here means "the short clip length", not the
-    # output length.
-    loop_trim_duration_arg = (
-        clipped_duration if (loop_active and clipped_duration > 0) else trim_duration_arg
-    )
-
-    def do_render() -> None:
-        if not has_overlay and not info.is_audio_only:
-            if (
-                not canvas_transform
-                and not trim_active
-                and not edge_trim_active
-                and not audio_mix_active
-                and not wm_active
-                and not loop_active
-            ):
-                log.info("export.path stream_copy")
-                try:
-                    simple_export.run_stream_copy(
-                        source=media, out=out, on_progress=on_progress,
-                        cancel_key=cancel_key,
+        # ---- resolve extra audio (optional) ----
+        extra_audio_path: Path | None = None
+        if req.audio.extra_audio_id:
+            extra_audio_path = _find_extra_audio(req.audio.extra_audio_id)
+            if extra_audio_path is None:
+                # Hard-fail when the user explicitly relies on the track for
+                # loop-mode duration; soft-warn when it's just a mix that we can
+                # render without (so the export still produces something usable).
+                if req.trim.loop:
+                    log.warning(
+                        "export.extra_audio_missing id=%s loop=true — refusing export",
+                        req.audio.extra_audio_id,
                     )
+                    EXPORT_JOBS[jid] = {"status": "error", "progress": 0, "error": "Extra audio track is missing on the server (file was cleaned up). Re-upload it before exporting in loop mode."}
                     return
-                except RuntimeError as exc:
-                    log.warning("export.stream_copy fallback filter_only err=%s", exc)
+                log.warning("export.extra_audio_missing id=%s — proceeding without mix", req.audio.extra_audio_id)
+
+        # ---- loop mode (Coub-style): repeat the trimmed slice across the extra
+        # audio's full duration. Only active when both sides agree.
+        loop_active = bool(req.trim.loop) and extra_audio_path is not None and not info.is_audio_only
+        loop_total_duration: float | None = None
+        if loop_active:
+            try:
+                extra_info = probe(extra_audio_path)
+                extra_dur = float(extra_info.duration)
+            except Exception as exc:
+                log.warning("export.loop_probe_failed extra=%s err=%s", extra_audio_path, exc)
+                extra_dur = 0.0
+            if extra_dur > 0:
+                loop_clip_duration = clipped_duration  # short slice
+                loop_total_duration = extra_dur
+                new_duration = extra_dur
+                # Source-track subtitles: stamp copies onto each iteration so each
+                # loop displays them. Extra-track subtitles already ride the
+                # master extra-audio timeline and need no expansion.
+                if req.subtitle_track == "source":
+                    from .loop_segments import expand_loop_segments
+                    segments_for_render = expand_loop_segments(
+                        segments_for_render,
+                        trim_in=trim_in,
+                        loop_clip_duration=loop_clip_duration,
+                        total_duration=loop_total_duration,
+                    )
+                log.info(
+                    "export.loop active clip=%.2fs total=%.2fs subtitle_track=%s",
+                    loop_clip_duration, loop_total_duration, req.subtitle_track,
+                )
+            else:
+                loop_active = False  # bail out, treat as normal export
+
+        log.info(
+            "export.render start target=%dx%d audio_only=%s duration=%.2fs trim_edges=(%.2f,%.2f) extra_audio=%s loop=%s",
+            resolved.target_w, resolved.target_h, info.is_audio_only, new_duration,
+            trim_in, trim_out, extra_audio_path, loop_active,
+        )
+
+        out = _output_path(req.video_id, req.clip_index)
+        last_pct = -10
+
+        def on_progress(pct: int) -> None:
+            nonlocal last_pct
+            if pct >= last_pct + 5 or pct == 100:
+                log.info("export.render percent=%d", pct)
+                last_pct = pct
+            EXPORT_JOBS[jid]["progress"] = pct
+            ws.push(jid, {"phase": "encode", "percent": pct, "video_id": req.video_id})
+
+        ws.push(jid, {"phase": "encode", "percent": 0, "video_id": req.video_id})
+
+        select_expr = silence.build_select_expr(keeps) if keeps is not None else None
+
+        has_overlay = any(
+            (s.text or "").strip() for s in segments_for_render
+        )
+        trim_active = keeps is not None
+        canvas_transform = bool(resolved.ffmpeg_filter)
+        audio_mix_active = (
+            extra_audio_path is not None or abs(req.audio.source_volume - 1.0) > 1e-3
+        )
+
+        trim_duration_arg = clipped_duration if edge_trim_active else None
+
+        # Watermark PNG is bundled into the Vite build output, so it lives
+        # alongside other static assets after `docker compose up --build`.
+        watermark_path = (STATIC_DIR / "watermark.png") if req.watermark else None
+        if watermark_path is not None and not watermark_path.exists():
+            log.warning("export.watermark_missing path=%s — exporting without it", watermark_path)
+            watermark_path = None
+        wm_active = watermark_path is not None
+
+        # In loop mode we always need a filter pass — no stream_copy can repeat
+        # frames. Trim_duration_arg here means "the short clip length", not the
+        # output length.
+        loop_trim_duration_arg = (
+            clipped_duration if (loop_active and clipped_duration > 0) else trim_duration_arg
+        )
+
+        def do_render() -> None:
+            if not has_overlay and not info.is_audio_only:
+                if (
+                    not canvas_transform
+                    and not trim_active
+                    and not edge_trim_active
+                    and not audio_mix_active
+                    and not wm_active
+                    and not loop_active
+                ):
+                    log.info("export.path stream_copy")
+                    try:
+                        simple_export.run_stream_copy(
+                            source=media, out=out, on_progress=on_progress,
+                            cancel_key=cancel_key,
+                        )
+                        return
+                    except RuntimeError as exc:
+                        log.warning("export.stream_copy fallback filter_only err=%s", exc)
+                log.info(
+                    "export.path filter_only trim_silence=%s edge_trim=%s canvas=%s audio_mix=%s loop=%s",
+                    trim_active, edge_trim_active, canvas_transform, audio_mix_active, loop_active,
+                )
+                simple_export.run_filter_only(
+                    source=media, out=out,
+                    canvas_filter=resolved.ffmpeg_filter,
+                    target_w=resolved.target_w,
+                    target_h=resolved.target_h,
+                    select_expr=select_expr,
+                    on_progress=on_progress,
+                    trim_in=trim_in,
+                    trim_duration=loop_trim_duration_arg,
+                    source_volume=req.audio.source_volume,
+                    extra_audio=extra_audio_path,
+                    extra_volume=req.audio.extra_volume,
+                    watermark_path=watermark_path,
+                    source_has_audio=info.has_audio,
+                    loop_total_duration=loop_total_duration,
+                    cancel_key=cancel_key,
+                )
+                return
             log.info(
-                "export.path filter_only trim_silence=%s edge_trim=%s canvas=%s audio_mix=%s loop=%s",
-                trim_active, edge_trim_active, canvas_transform, audio_mix_active, loop_active,
+                "export.path renderer has_overlay=%s audio_only=%s loop=%s",
+                has_overlay, info.is_audio_only, loop_active,
             )
-            simple_export.run_filter_only(
-                source=media, out=out,
-                canvas_filter=resolved.ffmpeg_filter,
+            renderer.render_export(
+                source=media,
+                out=out,
                 target_w=resolved.target_w,
                 target_h=resolved.target_h,
+                canvas=canvas_cfg,
+                canvas_filter=resolved.ffmpeg_filter,
+                segments=segments_for_render,
+                style=req.style,
+                position=req.position,
+                size=req.size,
+                duration=new_duration,
+                is_audio_only=info.is_audio_only,
                 select_expr=select_expr,
                 on_progress=on_progress,
                 trim_in=trim_in,
@@ -1793,109 +1844,91 @@ async def api_export(
                 source_volume=req.audio.source_volume,
                 extra_audio=extra_audio_path,
                 extra_volume=req.audio.extra_volume,
-                watermark_path=watermark_path,
+                watermark=wm_active,
                 source_has_audio=info.has_audio,
                 loop_total_duration=loop_total_duration,
                 cancel_key=cancel_key,
+                fps=req.fps,
+                resolution=req.resolution,
             )
-            return
-        log.info(
-            "export.path renderer has_overlay=%s audio_only=%s loop=%s",
-            has_overlay, info.is_audio_only, loop_active,
-        )
-        renderer.render_export(
-            source=media,
-            out=out,
-            target_w=resolved.target_w,
-            target_h=resolved.target_h,
-            canvas=canvas_cfg,
-            canvas_filter=resolved.ffmpeg_filter,
-            segments=segments_for_render,
-            style=req.style,
-            position=req.position,
-            size=req.size,
-            duration=new_duration,
-            is_audio_only=info.is_audio_only,
-            select_expr=select_expr,
-            on_progress=on_progress,
-            trim_in=trim_in,
-            trim_duration=loop_trim_duration_arg,
-            source_volume=req.audio.source_volume,
-            extra_audio=extra_audio_path,
-            extra_volume=req.audio.extra_volume,
-            watermark=wm_active,
-            source_has_audio=info.has_audio,
-            loop_total_duration=loop_total_duration,
-            cancel_key=cancel_key,
-        )
 
-    def abort_cancelled() -> None:
-        """Drop the partial output and tell the UI the export is over."""
-        out.unlink(missing_ok=True)
-        log.info("export.cancelled video_id=%s job_id=%s", req.video_id, jid)
-        ws.push(jid, {"phase": "export_cancelled", "video_id": req.video_id})
+        def abort_cancelled() -> None:
+            """Drop the partial output and tell the UI the export is over."""
+            out.unlink(missing_ok=True)
+            log.info("export.cancelled video_id=%s job_id=%s", req.video_id, jid)
+            ws.push(jid, {"phase": "export_cancelled", "video_id": req.video_id})
 
-    # Everything below sits under one try/finally so the cancel flag is always
-    # released — including on the early HTTPException exits — otherwise a later
-    # export of the same video/clip would find a stale "cancelled" flag and
-    # abort itself instantly.
-    try:
+        # Everything below sits under one try/finally so the cancel flag is always
+        # released — including on the early HTTPException exits — otherwise a later
+        # export of the same video/clip would find a stale "cancelled" flag and
+        # abort itself instantly.
         try:
-            await asyncio.to_thread(do_render)
-        except cancel_mod.OperationCancelled:
-            abort_cancelled()
-            raise HTTPException(status_code=499, detail="export cancelled")
-        except Exception as exc:
-            log.exception("export.failed video_id=%s err=%s", req.video_id, exc)
-            raise HTTPException(status_code=500, detail=f"export failed: {exc}")
-
-        out_size = out.stat().st_size if out.exists() else 0
-        elapsed = time.perf_counter() - t0
-        log.info(
-            "export.done video_id=%s out_size=%d (%.1f MB) elapsed=%.1fs",
-            req.video_id,
-            out_size,
-            out_size / 1024 / 1024,
-            elapsed,
-        )
-        # GIF post-processing: convert the rendered MP4 into a GIF using a
-        # two-pass palette pipeline. The intermediate MP4 stays on disk so a
-        # subsequent MP4 download still works.
-        final_path: Path = out
-        output_format = req.format
-        if req.format == "gif":
-            gif_path = _gif_output_path(req.video_id, req.clip_index)
-            ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
-            log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
             try:
-                await asyncio.to_thread(
-                    _encode_gif, out, gif_path, req.gif_quality, cancel_key,
-                )
-            except subprocess.CalledProcessError as exc:
-                # A Stop during the GIF encode also kills ffmpeg → non-zero exit.
-                # Distinguish that from a genuine encode failure.
-                if cancel_mod.is_cancelled(cancel_key):
-                    gif_path.unlink(missing_ok=True)
-                    abort_cancelled()
-                    raise HTTPException(status_code=499, detail="export cancelled")
-                log.warning("export.gif_failed video_id=%s err=%s", req.video_id, exc)
-                raise HTTPException(status_code=500, detail=f"gif encode failed: {exc}")
-            final_path = gif_path
-            gif_size = gif_path.stat().st_size if gif_path.exists() else 0
-            log.info("export.gif done video_id=%s size=%d (%.1f MB)", req.video_id, gif_size, gif_size / 1024 / 1024)
+                await asyncio.to_thread(do_render)
+            except cancel_mod.OperationCancelled:
+                EXPORT_JOBS[jid] = {"status": "error", "progress": EXPORT_JOBS.get(jid, {}).get("progress", 0), "error": "export cancelled"}
+                abort_cancelled()
+                return
+            except Exception as exc:
+                EXPORT_JOBS[jid] = {"status": "error", "progress": EXPORT_JOBS.get(jid, {}).get("progress", 0), "error": str(exc)}
+                log.exception("export.failed video_id=%s err=%s", req.video_id, exc)
+                return
 
-        ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id})
+            out_size = out.stat().st_size if out.exists() else 0
+            elapsed = time.perf_counter() - t0
+            log.info(
+                "export.done video_id=%s out_size=%d (%.1f MB) elapsed=%.1fs",
+                req.video_id,
+                out_size,
+                out_size / 1024 / 1024,
+                elapsed,
+            )
+            # GIF post-processing: convert the rendered MP4 into a GIF using a
+            # two-pass palette pipeline. The intermediate MP4 stays on disk so a
+            # subsequent MP4 download still works.
+            final_path: Path = out
+            output_format = req.format
+            if req.format == "gif":
+                gif_path = _gif_output_path(req.video_id, req.clip_index)
+                ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
+                log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
+                try:
+                    await asyncio.to_thread(
+                        _encode_gif, out, gif_path, req.gif_quality, cancel_key,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    # A Stop during the GIF encode also kills ffmpeg → non-zero exit.
+                    # Distinguish that from a genuine encode failure.
+                    if cancel_mod.is_cancelled(cancel_key):
+                        EXPORT_JOBS[jid] = {"status": "error", "progress": EXPORT_JOBS.get(jid, {}).get("progress", 0), "error": "export cancelled"}
+                        gif_path.unlink(missing_ok=True)
+                        abort_cancelled()
+                        return
+                    EXPORT_JOBS[jid] = {"status": "error", "progress": EXPORT_JOBS.get(jid, {}).get("progress", 0), "error": str(exc)}
+                    log.warning("export.gif_failed video_id=%s err=%s", req.video_id, exc)
+                    return
+                final_path = gif_path
+                gif_size = gif_path.stat().st_size if gif_path.exists() else 0
+                log.info("export.gif done video_id=%s size=%d (%.1f MB)", req.video_id, gif_size, gif_size / 1024 / 1024)
 
-        return ExportResponse(
-            video_id=req.video_id,
-            output_path=str(final_path),
-            output_format=output_format,
-            clip_index=req.clip_index,
-            original_duration=info.duration,
-            output_duration=new_duration,
-            cuts=keeps,
-        )
-    finally:
+            ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id})
+
+            EXPORT_JOBS[jid] = {
+                "status": "done",
+                "progress": 100,
+                "error": None,
+                "video_id": req.video_id,
+                "output_path": str(final_path),
+                "clip_index": req.clip_index,
+                "format": output_format,
+            }
+        finally:
+            cancel_mod.clear(cancel_key)
+
+    except Exception as exc:
+        # Catch any unexpected errors during setup
+        log.exception("export.worker_failed video_id=%s err=%s", req.video_id, exc)
+        EXPORT_JOBS[jid] = {"status": "error", "progress": 0, "error": str(exc)}
         cancel_mod.clear(cancel_key)
 
 
@@ -1910,17 +1943,88 @@ def api_export_cancel(job_id: str) -> dict:
     output file. Mirrors the shape of the other cancel endpoints.
     """
     cancelled = cancel_mod.request_cancel(f"export:{job_id}")
+    # Update job status to cancelled for immediate UI feedback
+    if job_id in EXPORT_JOBS:
+        EXPORT_JOBS[job_id]["status"] = "cancelled"
     log.info("export.cancel job_id=%s cancelled=%s", job_id, cancelled)
     return {"ok": True, "cancelled": cancelled}
 
+@app.get("/api/export/{job_id}/status")
+async def get_export_status(job_id: str):
+    if job_id not in EXPORT_JOBS:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    return EXPORT_JOBS[job_id]
 
-@app.get("/api/download/{video_id}")
+@app.get("/api/download/{identifier}")
 def api_download(
-    video_id: str,
+    identifier: str,
     format: str = "mp4",
     clip_index: int | None = Query(default=None, ge=1, le=999),
 ) -> FileResponse:
-    _validate_video_id(video_id)
+    # Check if identifier is a job_id (exists in EXPORT_JOBS)
+    job_info = EXPORT_JOBS.get(identifier)
+
+    if job_info and job_info.get("status") == "done":
+        # It's a job_id, use stored info
+        video_id = job_info.get("video_id")
+        output_path = job_info.get("output_path")
+        stored_clip_index = job_info.get("clip_index")
+
+        # Use stored clip_index if not provided in query
+        if clip_index is None:
+            clip_index = stored_clip_index
+
+        # If we have a stored output_path, use it directly
+        if output_path:
+            out = Path(output_path)
+            if out.exists():
+                # Determine media type and extension from file extension
+                if out.suffix.lower() == ".gif":
+                    media_type = "image/gif"
+                    ext = "gif"
+                else:
+                    media_type = "video/mp4"
+                    ext = "mp4"
+
+                if clip_index is None:
+                    filename = f"{video_id}.{ext}"
+                else:
+                    filename = f"clip-{clip_index:02d}.{ext}"
+
+                return FileResponse(
+                    out,
+                    media_type=media_type,
+                    filename=filename,
+                )
+
+        # Fallback: construct path from video_id and clip_index
+        # Use format query param to determine file type
+        if format == "gif":
+            out = _gif_output_path(video_id, clip_index)
+            media_type = "image/gif"
+            ext = "gif"
+        else:
+            out = _output_path(video_id, clip_index)
+            media_type = "video/mp4"
+            ext = "mp4"
+
+        if not out.exists():
+            raise HTTPException(status_code=404, detail="output not found")
+
+        if clip_index is None:
+            filename = f"{video_id}.{ext}"
+        else:
+            filename = f"clip-{clip_index:02d}.{ext}"
+
+        return FileResponse(
+            out,
+            media_type=media_type,
+            filename=filename,
+        )
+    
+    # Not a job_id, treat as video_id (existing behavior)
+    _validate_video_id(identifier)
+    video_id = identifier
 
     if format == "gif":
         out = _gif_output_path(video_id, clip_index)

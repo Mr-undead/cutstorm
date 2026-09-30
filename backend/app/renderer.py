@@ -31,6 +31,21 @@ RENDER_FPS = 30
 RENDER_URL = "http://127.0.0.1:8000/?render=1"
 
 
+def _get_bitrate_params(resolution: str | None, fps: int) -> dict:
+    """Return CRF / maxrate / bufsize for libx264 based on output resolution and FPS."""
+    res = (resolution or "1080p").lower()
+    if res in ("720p", "720"):
+        return {"crf": 18, "maxrate": "8M", "bufsize": "12M"}
+    if res in ("1080p", "1080"):
+        if fps >= 60:
+            return {"crf": 18, "maxrate": "20M", "bufsize": "30M"}
+        return {"crf": 18, "maxrate": "14M", "bufsize": "20M"}
+    if res in ("4k", "2160p", "2160"):
+        return {"crf": 18, "maxrate": "45M", "bufsize": "60M"}
+    # Fallback: treat unknown as 1080p @ 30fps
+    return {"crf": 18, "maxrate": "14M", "bufsize": "20M"}
+
+
 def _build_render_state(
     segments: list[Segment],
     style: Style,
@@ -170,6 +185,7 @@ def _ffmpeg_cmd_video(
     extra_volume: float = 1.0,
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
+    resolution: str | None = None,
 ) -> list[str]:
     """Build ffmpeg for: source video → scale/crop + overlay PNG stream + audio.
 
@@ -286,6 +302,7 @@ def _ffmpeg_cmd_video(
         if not loop_active and trim_duration is not None and trim_duration > 0.0:
             cmd += ["-t", f"{trim_duration:.3f}"]
         cmd += ["-i", str(extra_audio)]
+    br = _get_bitrate_params(resolution, fps)
     cmd += [
         "-filter_complex", filter_complex,
         "-map", "[v]",
@@ -293,7 +310,9 @@ def _ffmpeg_cmd_video(
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-preset", "slow",
-        "-crf", "16",
+        "-crf", str(br["crf"]),
+        "-maxrate", br["maxrate"],
+        "-bufsize", br["bufsize"],
         *acopy,
         "-shortest",
         str(out),
@@ -315,6 +334,7 @@ def _ffmpeg_cmd_audio_only(
     source_volume: float = 1.0,
     extra_audio: Path | None = None,
     extra_volume: float = 1.0,
+    resolution: str | None = None,
 ) -> list[str]:
     """Build ffmpeg for: synthetic color bg + audio + overlay PNG stream."""
     ff_color = hex_to_ffmpeg_color(bg_color)
@@ -353,6 +373,7 @@ def _ffmpeg_cmd_audio_only(
         if trim_duration is not None and trim_duration > 0.0:
             cmd += ["-t", f"{trim_duration:.3f}"]
         cmd += ["-i", str(extra_audio)]
+    br = _get_bitrate_params(resolution, fps)
     cmd += [
         "-filter_complex", filter_complex,
         "-map", "[v]",
@@ -360,7 +381,9 @@ def _ffmpeg_cmd_audio_only(
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-preset", "slow",
-        "-crf", "16",
+        "-crf", str(br["crf"]),
+        "-maxrate", br["maxrate"],
+        "-bufsize", br["bufsize"],
         "-c:a", "aac",
         "-b:a", "192k",
         "-shortest",
@@ -394,6 +417,7 @@ def render_export(
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
     cancel_key: str | None = None,
+    resolution: str | None = None,
 ) -> None:
     """Synchronous entry. Runs Playwright frame capture + ffmpeg pipe.
 
@@ -415,6 +439,7 @@ def render_export(
             trim_in=trim_in, trim_duration=trim_duration,
             source_volume=source_volume,
             extra_audio=extra_audio, extra_volume=extra_volume,
+            resolution=resolution,
         )
     else:
         cmd = _ffmpeg_cmd_video(
@@ -427,6 +452,7 @@ def render_export(
             extra_audio=extra_audio, extra_volume=extra_volume,
             source_has_audio=source_has_audio,
             loop_total_duration=loop_total_duration,
+            resolution=resolution,
         )
     log.info("renderer.ffmpeg cmd=%s", shlex.join(cmd))
 

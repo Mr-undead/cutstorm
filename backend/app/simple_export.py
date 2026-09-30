@@ -12,8 +12,8 @@ Three-way dispatch lives in `main.api_export`:
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,6 +24,23 @@ log = logging.getLogger(__name__)
 ProgressCb = Callable[[int], None]
 
 
+def _get_duration(source: Path) -> float:
+    """Get media duration in seconds using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(source),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception as e:
+        log.warning("simple_export: failed to get duration for %s: %s", source, e)
+    return 0.0
+
+
 def run_stream_copy(
     source: Path,
     out: Path,
@@ -32,14 +49,15 @@ def run_stream_copy(
 ) -> None:
     """Case A: canvas=source, no trim, no overlay, not audio-only."""
     out.parent.mkdir(parents=True, exist_ok=True)
+    total_duration = _get_duration(source)
     cmd = [
-        "ffmpeg", "-y", "-nostats", "-loglevel", "error",
+        "ffmpeg", "-y", "-progress", "pipe:2",
         "-i", str(source),
         "-c", "copy",
         str(out),
     ]
     log.info("simple_export.stream_copy cmd=%s", " ".join(cmd))
-    _run(cmd, cancel_key=cancel_key)
+    _run(cmd, on_progress=on_progress, total_duration=total_duration, cancel_key=cancel_key)
     if on_progress is not None:
         on_progress(100)
 
@@ -170,7 +188,10 @@ def run_filter_only(
         # No source audio and no extra — produce a silent MP4.
         audio_map = ["-an"]
 
-    cmd = ["ffmpeg", "-y", "-nostats", "-loglevel", "error"]
+    # Determine total duration for progress reporting
+    total_duration = loop_total_duration if loop_active else (trim_duration if trim_duration and trim_duration > 0 else _get_duration(source))
+
+    cmd = ["ffmpeg", "-y", "-progress", "pipe:2"]
     # Apply trim to the source input (and extra input) via input-seek.
     if trim_in > 0.0:
         cmd += ["-ss", f"{trim_in:.3f}"]
@@ -203,28 +224,84 @@ def run_filter_only(
         cmd += ["-shortest"]
     cmd += [str(out)]
     log.info("simple_export.filter_only cmd=%s", " ".join(cmd))
-    _run(cmd, cancel_key=cancel_key)
+    _run(cmd, on_progress=on_progress, total_duration=total_duration, cancel_key=cancel_key)
     if on_progress is not None:
         on_progress(100)
 
 
-def _run(cmd: list[str], cancel_key: str | None = None) -> None:
-    stderr_file = tempfile.TemporaryFile(mode="w+b")
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+def _run(
+    cmd: list[str],
+    on_progress: Optional[ProgressCb] = None,
+    total_duration: float = 0.0,
+    cancel_key: str | None = None,
+) -> None:
+    """Run ffmpeg command and report progress via on_progress callback.
+
+    Uses ffmpeg's `-progress pipe:2` output to parse `out_time_us` and
+    calculate percentage based on total_duration.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
     if cancel_key is not None:
         cancel.register_proc(cancel_key, proc)
+
+    last_pct = -1
+    stderr_lines: list[str] = []
+
+    def parse_progress(line: str):
+        nonlocal last_pct
+        out_time_us = 0
+        line = line.strip()
+        # ffmpeg progress format: key=value
+        if line.startswith("out_time_us="):
+            try:
+                out_time_us = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
+        # Also handle the default stats format as fallback: time=HH:MM:SS.mmm
+        elif "time=" in line and not line.startswith("out_time_us="):
+            match = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
+            if match:
+                h, m, s = match.groups()
+                out_time_us = int(float(h) * 3600 + float(m) * 60 + float(s)) * 1_000_000
+
+        if total_duration > 0 and out_time_us > 0:
+            current_sec = out_time_us / 1_000_000
+            pct = int(min(99, (current_sec / total_duration) * 100))
+            if pct >= last_pct + 1:
+                last_pct = pct
+                if on_progress is not None:
+                    on_progress(pct)
+
     try:
+        # Read stderr line by line to parse progress
+        if proc.stderr:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+                # Check for cancellation on every line read
+                if cancel_key is not None and cancel.is_cancelled(cancel_key):
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise cancel.OperationCancelled("export cancelled by user")
+                parse_progress(line)
         rc = proc.wait()
-        stderr_file.seek(0)
-        err = stderr_file.read().decode("utf-8", errors="replace")[-3000:]
     finally:
         if cancel_key is not None:
             cancel.unregister_proc(cancel_key, proc)
-        stderr_file.close()
+
     # A terminate() from the cancel endpoint also makes rc != 0; check the
     # flag first so a user Stop surfaces as a clean cancel, not an ffmpeg
     # failure (which callers treat as a fatal error / retry candidate).
     if cancel.is_cancelled(cancel_key):
         raise cancel.OperationCancelled("export cancelled by user")
     if rc != 0:
-        raise RuntimeError(f"ffmpeg failed (code {rc}):\n{err}")
+        err = "".join(stderr_lines)
+        raise RuntimeError(f"ffmpeg failed (code {rc}):\n{err[-3000:]}")

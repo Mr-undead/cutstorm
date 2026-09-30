@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -214,9 +214,13 @@ class ExportRequest(BaseModel):
     # repetition across each loop iteration, extra segments ride the master
     # extra-audio timeline as-is).
     subtitle_track: SubtitleTrack = "source"
+    resolution: Optional[str] = "1080p"
+    fps: Optional[int] = 30
+    optimize_for_instagram: Optional[bool] = True
 
 
 class ExportResponse(BaseModel):
+    job_id: str
     video_id: str
     output_path: str
     output_format: ExportFormat = "mp4"

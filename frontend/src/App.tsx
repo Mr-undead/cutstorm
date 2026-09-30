@@ -7,6 +7,7 @@ import { ProgressBar } from "./components/ProgressBar";
 import { RenderPage } from "./components/RenderPage";
 import { Sidebar } from "./components/Sidebar";
 import { Timeline } from "./components/Timeline";
+import { ExportModal } from "./components/ExportModal";
 import { Uploader } from "./components/Uploader";
 import { SegmentList } from "./components/SegmentList";
 import { StylePanel } from "./components/StylePanel";
@@ -33,6 +34,7 @@ export function App() {
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
   );
+  const [isExportOpen, setIsExportOpen] = useState(false);
   useHotkeys();
 
   // Listen for viewport width changes to toggle mobile layout.
@@ -155,7 +157,7 @@ export function App() {
 
   return (
     <div className={`shell${isMobile ? " shell-mobile" : ""}`}>
-      <TopBar onOpenSidebar={() => setSidebarOpen(true)} />
+      <TopBar onOpenSidebar={() => setSidebarOpen(true)} onOpenExport={() => setIsExportOpen(true)} />
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       {hasVideo ? (
@@ -197,6 +199,11 @@ export function App() {
       )}
 
       <ProgressBar />
+
+      <ExportModal
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
+      />
 
       {error && (
         <div
