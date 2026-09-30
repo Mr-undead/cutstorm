@@ -89,12 +89,11 @@ export function VideoPreview({
       // fixed point. Keeping the last good scale lets the ResizeObserver apply
       // the real value as soon as the box has a size again.
       if (r.width <= 0 || r.height <= 0) return;
-      // Fill the available width so the frame never leaves black bars on the
-      // sides.  On mobile the stage height is fixed (45 dvh) and would
-      // otherwise force a smaller scale that clips the frame horizontally.
-      // Vertical overflow is clipped by the parent .mobile-preview container
-      // (overflow: hidden) when it exceeds the stage.
-      const s = r.width / previewW;
+      // Fit the frame inside the available stage box in both dimensions.
+      // Width-only scaling caused tall presets (e.g. 9:16) to overflow the
+      // container vertically — the parent overflow:hidden would clip the
+      // bottom. Using min(width, height) keeps every layer inside bounds.
+      const s = Math.min(r.width / previewW, r.height / previewH);
       setScale(Math.max(0.01, s));
     };
     measure();
@@ -262,10 +261,10 @@ export function VideoPreview({
               data-testid="preview-video"
               style={{
                 width: "100%",
-                height: "auto",
+                height: "100%",
                 maxWidth: "100%",
                 maxHeight: "100%",
-                objectFit: "contain",
+                objectFit: resolved.sourceFit,
                 objectPosition: resolved.sourceObjectPosition,
                 background: canvas.bg_color,
               }}
