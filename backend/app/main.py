@@ -365,16 +365,33 @@ def _find_extra_audio(extra_id: str) -> Path | None:
     return None
 
 
-def _output_path(video_id: str, clip_index: int | None = None) -> Path:
+def _output_path(video_id: str, clip_index: int | None = None, fmt: str = "mp4", original_filename: str | None = None) -> Path:
+    """Generate output path. If original_filename is provided, use it as base with '_export' suffix."""
+    # Determine extension from format
+    ext = fmt.lower()
+    if ext not in ("mp4", "gif", "mkv"):
+        ext = "mp4"
+    
+    if original_filename:
+        # Strip extension from original filename
+        base = Path(original_filename).stem
+        # Sanitize filename
+        base = "".join(c if c.isalnum() or c in "-_ " else "_" for c in base)
+        base = base.strip()
+        if not base:
+            base = video_id
+        if clip_index is None:
+            return OUTPUTS_DIR / f"{base}_export.{ext}"
+        return OUTPUTS_DIR / f"{base}_export_clip_{clip_index:02d}.{ext}"
+    
+    # Fallback to video_id
     if clip_index is None:
-        return OUTPUTS_DIR / f"{video_id}.mp4"
-    return OUTPUTS_DIR / f"{video_id}_clip_{clip_index:02d}.mp4"
-
+        return OUTPUTS_DIR / f"{video_id}.{ext}"
+    return OUTPUTS_DIR / f"{video_id}_clip_{clip_index:02d}.{ext}"
 
 def _gif_output_path(video_id: str, clip_index: int | None = None) -> Path:
-    if clip_index is None:
-        return OUTPUTS_DIR / f"{video_id}.gif"
-    return OUTPUTS_DIR / f"{video_id}_clip_{clip_index:02d}.gif"
+    # Kept for backward compatibility
+    return _output_path(video_id, clip_index, "gif")
 
 
 _GIF_PRESETS: dict[str, dict[str, str | int]] = {
@@ -1738,7 +1755,17 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
             trim_in, trim_out, extra_audio_path, loop_active,
         )
 
-        out = _output_path(req.video_id, req.clip_index)
+        # Read original_filename from meta.json
+        meta_path = _meta_path(req.video_id)
+        original_filename = None
+        if meta_path.exists():
+            try:
+                meta_data = json.loads(meta_path.read_text())
+                original_filename = meta_data.get("original_filename")
+            except Exception:
+                pass
+
+        out = _output_path(req.video_id, req.clip_index, req.format, original_filename)
         last_pct = -10
 
         def on_progress(pct: int) -> None:
@@ -1889,7 +1916,7 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
             final_path: Path = out
             output_format = req.format
             if req.format == "gif":
-                gif_path = _gif_output_path(req.video_id, req.clip_index)
+                gif_path = _output_path(req.video_id, req.clip_index, "gif", original_filename)
                 ws.push(jid, {"phase": "encode", "percent": 100, "video_id": req.video_id, "stage": "gif_start"})
                 log.info("export.gif start video_id=%s quality=%s", req.video_id, req.gif_quality)
                 try:
@@ -1969,6 +1996,7 @@ def api_download(
         video_id = job_info.get("video_id")
         output_path = job_info.get("output_path")
         stored_clip_index = job_info.get("clip_index")
+        stored_format = job_info.get("format", "mp4")
 
         # Use stored clip_index if not provided in query
         if clip_index is None:
@@ -1979,17 +2007,16 @@ def api_download(
             out = Path(output_path)
             if out.exists():
                 # Determine media type and extension from file extension
-                if out.suffix.lower() == ".gif":
+                ext = out.suffix.lower().lstrip('.')
+                if ext == "gif":
                     media_type = "image/gif"
-                    ext = "gif"
+                elif ext == "mkv":
+                    media_type = "video/x-matroska"
                 else:
                     media_type = "video/mp4"
-                    ext = "mp4"
 
-                if clip_index is None:
-                    filename = f"{video_id}.{ext}"
-                else:
-                    filename = f"clip-{clip_index:02d}.{ext}"
+                # Use the actual filename from the output path
+                filename = out.name
 
                 return FileResponse(
                     out,
@@ -2003,6 +2030,10 @@ def api_download(
             out = _gif_output_path(video_id, clip_index)
             media_type = "image/gif"
             ext = "gif"
+        elif format == "mkv":
+            out = _output_path(video_id, clip_index, "mkv")
+            media_type = "video/x-matroska"
+            ext = "mkv"
         else:
             out = _output_path(video_id, clip_index)
             media_type = "video/mp4"
@@ -2021,7 +2052,7 @@ def api_download(
             media_type=media_type,
             filename=filename,
         )
-    
+
     # Not a job_id, treat as video_id (existing behavior)
     _validate_video_id(identifier)
     video_id = identifier
@@ -2030,6 +2061,10 @@ def api_download(
         out = _gif_output_path(video_id, clip_index)
         media_type = "image/gif"
         ext = "gif"
+    elif format == "mkv":
+        out = _output_path(video_id, clip_index, "mkv")
+        media_type = "video/x-matroska"
+        ext = "mkv"
     else:
         out = _output_path(video_id, clip_index)
         media_type = "video/mp4"

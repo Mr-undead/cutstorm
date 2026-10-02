@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useStore } from "../store";
 
-export type ExportFormat = "mp4" | "gif";
+export type ExportFormat = "mp4" | "gif" | "mkv";
 export type ExportResolution = "720p" | "1080p" | "4k";
 export type ExportFps = 30 | 60;
 export type GifQuality = "low" | "medium" | "high";
@@ -265,7 +265,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
             <fieldset className="export-fieldset">
               <legend>Format</legend>
               <div className="export-option-group">
-                {(["mp4", "gif"] as const).map((f) => (
+                {( ["mp4", "gif", "mkv"] as const ).map((f) => (
                   <button
                     key={f}
                     className={`export-option-btn ${format === f ? "active" : ""}`}
@@ -279,7 +279,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
             </fieldset>
 
             {/* Resolution (hidden for GIF) */}
-            {format === "mp4" && (
+            {(format === "mp4" || format === "mkv") && (
               <fieldset className="export-fieldset">
                 <legend>Resolution</legend>
                 <div className="export-option-group">
@@ -301,7 +301,7 @@ export function ExportModal({ isOpen, onClose }: ExportModalProps) {
             )}
 
             {/* Frame rate (hidden for GIF) */}
-            {format === "mp4" && (
+            {(format === "mp4" || format === "mkv") && (
               <fieldset className="export-fieldset">
                 <legend>Frame Rate</legend>
                 <div className="export-option-group">

@@ -9,6 +9,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "faster-whisper>=1.0.0",
     "whisperx>=3.1.1",
+    "vosk>=0.3.45",
     "pydantic>=2.6",
     "websockets>=12.0",
     "playwright>=1.50",

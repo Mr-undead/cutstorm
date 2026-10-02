@@ -246,8 +246,8 @@ type Actions = {
 };
 
 export const defaultStyle: Style = {
-  font_family: "Anton",
-  font_size: 48,
+  font_family: "Vazirmatn",
+  font_size: 25,
   bold: false,
   italic: false,
   uppercase: false,
@@ -265,7 +265,7 @@ export const defaultStyle: Style = {
   fade_out_ms: 0,
   mode: "karaoke",
   words_per_chunk: 4,
-  active_word_color: "#FFD400",
+  active_word_color: "#FFFF00",
 };
 
 export const useStore = create<State & Actions>()(
@@ -809,6 +809,11 @@ export const useStore = create<State & Actions>()(
             extraAudioDuration: 0,
             extraVolume: 1.0,
           },
+          style: { ...defaultStyle },
+          position: { x_pct: 10, y_pct: 80 },
+          size: { w_pct: 80, h_pct: 15 },
+          generateSubs: true,
+          useSubs: true,
           // A new project always starts from the source frame: return the Canvas
           // preset to "source". `canvas.mode` and the remaining canvas fields
           // (crop_anchor / custom / bg_color) are intentionally preserved so a

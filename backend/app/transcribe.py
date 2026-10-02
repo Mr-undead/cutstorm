@@ -12,7 +12,6 @@ from .models import Segment, Word
 
 log = logging.getLogger(__name__)
 
-
 @dataclass
 class ProbeInfo:
     duration: float
@@ -20,7 +19,6 @@ class ProbeInfo:
     height: int
     is_audio_only: bool = False
     has_audio: bool = True
-
 
 def probe(video: Path) -> ProbeInfo:
     out = subprocess.run(
@@ -53,7 +51,6 @@ def probe(video: Path) -> ProbeInfo:
         has_audio=aud is not None,
     )
 
-
 import threading as _threading
 
 _whisper_models: dict[str, object] = {}
@@ -64,22 +61,20 @@ _align_models: dict[str, tuple[object, dict]] = {}
 _whisper_model_lock = _threading.Lock()
 _align_model_lock = _threading.Lock()
 
+_vosk_models: dict[str, object] = {}
+_vosk_model_lock = _threading.Lock()
 
 def _device() -> str:
     return os.environ.get("WHISPER_DEVICE", "cpu")
 
-
 def _compute() -> str:
     return os.environ.get("WHISPER_COMPUTE", "int8")
-
 
 def _models_dir() -> str:
     return os.environ.get("MODELS_DIR", "/data/models")
 
-
 def _skip_align() -> bool:
     return os.environ.get("WHISPERX_SKIP_ALIGN", "0") == "1"
-
 
 def _get_fw_model(name: Optional[str]):
     from faster_whisper import WhisperModel
@@ -108,7 +103,6 @@ def _get_fw_model(name: Optional[str]):
         _whisper_models[resolved] = m
         return m
 
-
 def _get_align_model(language: str):
     import whisperx
     import time as _t
@@ -131,6 +125,23 @@ def _get_align_model(language: str):
         _align_models[language] = (model, meta)
     return model, meta
 
+def _get_vosk_model(model_path: str):
+    from vosk import Model
+    import time as _t
+
+    if model_path in _vosk_models:
+        log.info("vosk.model_cached path=%s", model_path)
+        return _vosk_models[model_path]
+    with _vosk_model_lock:
+        if model_path in _vosk_models:
+            log.info("vosk.model_cached path=%s (after wait)", model_path)
+            return _vosk_models[model_path]
+        log.info("vosk.model_loading path=%s", model_path)
+        t0 = _t.perf_counter()
+        m = Model(model_path)
+        log.info("vosk.model_loaded path=%s elapsed=%.1fs", model_path, _t.perf_counter() - t0)
+        _vosk_models[model_path] = m
+        return m
 
 def _interpolate_word_timings(
     raw_words: list[dict],
@@ -213,7 +224,6 @@ def _interpolate_word_timings(
         out.append(Word(start=s, end=e, text=it[0]))
     return out
 
-
 def _synthesize_words(text: str, start: float, end: float) -> list[Word]:
     toks = text.strip().split()
     if not toks:
@@ -228,7 +238,6 @@ def _synthesize_words(text: str, start: float, end: float) -> list[Word]:
         )
         for i, w in enumerate(toks)
     ]
-
 
 def _raw_transcribe_stream(
     video: Path,
@@ -261,17 +270,15 @@ def _raw_transcribe_stream(
             info,
         )
 
-
 ProgressCb = Callable[[str, int], None]
 SegmentCb = Callable[[Segment, int, int], None]  # (segment, index, percent)
 CancelCheck = Callable[[], bool]
-
 
 def _align_one(
     raw_seg: dict,
     audio,
     align_model,
-    meta,
+    align_meta,
     device: str,
 ) -> list[Word]:
     """Run wav2vec2 alignment on a single whisper segment. Returns words[]."""
@@ -280,7 +287,7 @@ def _align_one(
         aligned = whisperx.align(
             [raw_seg],
             align_model,
-            meta,
+            align_meta,
             audio,
             device=device,
             return_char_alignments=False,
@@ -300,6 +307,179 @@ def _align_one(
         words = _synthesize_words(raw_seg["text"], seg_start, seg_end)
     return words
 
+def _transcribe_stream_vosk(
+    video: Path,
+    language: Optional[str],
+    on_segment: Optional[SegmentCb],
+    on_progress: Optional[ProgressCb],
+    cancel_check: Optional[CancelCheck],
+) -> tuple[list[Segment], Optional[str]]:
+    """Vosk-specific streaming transcription pipeline for Persian."""
+    import time as _t
+    import subprocess
+    from vosk import KaldiRecognizer
+
+    duration = probe(video).duration
+    log.info(
+        "transcribe_stream_vosk.start duration=%.2fs language_hint=%s",
+        duration, language,
+    )
+
+    # Get Vosk model path from environment variable
+    model_path = os.environ.get("VOSK_FA_MODEL_PATH", "/models/vosk/fa-0.42")
+    model = _get_vosk_model(model_path)
+
+    # ffmpeg command to convert to mono 16-bit PCM at 16kHz
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", str(video),
+        "-f", "s16le",
+        "-ac", "1",
+        "-ar", "16000",
+        "-",
+    ]
+
+    # Start ffmpeg process
+    ffmpeg_process = subprocess.Popen(
+        ffmpeg_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0  # Unbuffered
+    )
+
+    # Create Vosk recognizer
+    recognizer = KaldiRecognizer(model, 16000)
+    recognizer.SetWords(True)
+
+    out: list[Segment] = []
+    idx = 0
+    t0 = _t.perf_counter()
+    words_buffer: list[Word] = []
+    segment_start_time: Optional[float] = None
+    segment_end_time: Optional[float] = None
+    segment_text_parts: list[str] = []
+
+    try:
+        while True:
+            if cancel_check and cancel_check():
+                log.info("transcribe_stream_vosk.cancelled after %d segments", len(out))
+                break
+
+            # Read audio data from ffmpeg stdout
+            data = ffmpeg_process.stdout.read(4000)  # Read in chunks
+            if len(data) == 0:
+                break  # End of stream
+
+            if recognizer.AcceptWaveform(data):
+                # Get final result
+                result_json = recognizer.Result()
+                result = json.loads(result_json)
+                
+                if "result" in result and result["result"]:
+                    # Process word-level results
+                    for word_info in result["result"]:
+                        word = Word(
+                            start=float(word_info["start"]),
+                            end=float(word_info["end"]),
+                            text=word_info["word"]
+                        )
+                        words_buffer.append(word)
+                        
+                        # Update segment timing
+                        if segment_start_time is None:
+                            segment_start_time = word.start
+                        segment_end_time = word.end
+                        segment_text_parts.append(word.text)
+                    
+                    # Create segment from buffered words
+                    if words_buffer and (segment_end_time is not None) and (segment_start_time is not None):
+                        seg = Segment(
+                            start=segment_start_time,
+                            end=segment_end_time,
+                            text=" ".join(segment_text_parts),
+                            words=words_buffer.copy(),
+                        )
+                        out.append(seg)
+                        pct = max(0, min(99, int(segment_end_time / duration * 100))) if duration > 0 else 0
+                        log.debug("transcribe_stream_vosk.segment idx=%d t=%.2f-%.2f words=%d pct=%d",
+                                  idx, seg.start, seg.end, len(seg.words), pct)
+                        if on_segment:
+                            on_segment(seg, idx, pct)
+                        if on_progress:
+                            on_progress("transcribe", pct)
+                        idx += 1
+                        
+                        # Reset buffers for next segment
+                        words_buffer.clear()
+                        segment_start_time = None
+                        segment_end_time = None
+                        segment_text_parts.clear()
+                else:
+                    # No words in result, but we might have partial data
+                    pass
+            else:
+                # Get partial result for progress tracking
+                partial_json = recognizer.PartialResult()
+                partial = json.loads(partial_json)
+                # We could use partial for progress if needed, but for now we'll skip
+
+        # Get final remaining results
+        final_json = recognizer.FinalResult()
+        final_result = json.loads(final_json)
+        
+        if "result" in final_result and final_result["result"]:
+            # Process remaining word-level results
+            for word_info in final_result["result"]:
+                word = Word(
+                    start=float(word_info["start"]),
+                    end=float(word_info["end"]),
+                    text=word_info["word"]
+                )
+                words_buffer.append(word)
+                
+                # Update segment timing
+                if segment_start_time is None:
+                    segment_start_time = word.start
+                segment_end_time = word.end
+                segment_text_parts.append(word.text)
+            
+            # Create final segment from remaining words
+            if words_buffer and (segment_end_time is not None) and (segment_start_time is not None):
+                seg = Segment(
+                    start=segment_start_time,
+                    end=segment_end_time,
+                    text=" ".join(segment_text_parts),
+                    words=words_buffer.copy(),
+                )
+                out.append(seg)
+                pct = max(0, min(99, int(segment_end_time / duration * 100))) if duration > 0 else 0
+                log.debug("transcribe_stream_vosk.segment idx=%d t=%.2f-%.2f words=%d pct=%d",
+                          idx, seg.start, seg.end, len(seg.words), pct)
+                if on_segment:
+                    on_segment(seg, idx, pct)
+                if on_progress:
+                    on_progress("transcribe", pct)
+                idx += 1
+
+    finally:
+        # Clean up ffmpeg process
+        if ffmpeg_process.poll() is None:
+            ffmpeg_process.terminate()
+            try:
+                ffmpeg_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                ffmpeg_process.kill()
+                ffmpeg_process.wait()
+
+    if on_progress:
+        on_progress("transcribe", 100)
+    log.info(
+        "transcribe_stream_vosk.done segments=%d lang=fa elapsed=%.1fs",
+        len(out), _t.perf_counter() - t0,
+    )
+    return (out, "fa")
 
 def transcribe_stream(
     video: Path,
@@ -315,6 +495,10 @@ def transcribe_stream(
 
     `cancel_check()` polled between segments; True → stop early.
     """
+    # Handle Vosk Persian model
+    if model_name == "vosk-fa-0.42":
+        return _transcribe_stream_vosk(video, language, on_segment, on_progress, cancel_check)
+
     import time as _t
 
     duration = probe(video).duration
@@ -392,7 +576,6 @@ def transcribe_stream(
         len(out), detected_lang, _t.perf_counter() - t0,
     )
     return (out, detected_lang)
-
 
 def transcribe(
     video: Path,

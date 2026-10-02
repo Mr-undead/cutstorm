@@ -187,7 +187,7 @@ class ExtraAudioResponse(BaseModel):
     name: str
 
 
-ExportFormat = Literal["mp4", "gif"]
+ExportFormat = Literal["mp4", "gif", "mkv"]
 GifQuality = Literal["low", "medium", "high"]
 
 

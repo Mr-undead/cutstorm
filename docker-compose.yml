@@ -8,8 +8,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - /home/behrooz/vosk-model-fa-0.42:/models/vosk/fa-0.42:ro
       - ./data:/data
     environment:
+      VOSK_FA_MODEL_PATH: /models/vosk/fa-0.42
       # Default model is loaded into RAM on container startup (warmup).
       # Must match what the frontend requests by default so the first
       # transcribe hits cached model.
@@ -24,8 +26,10 @@ services:
       target: test
     profiles: ["test"]
     volumes:
+      - /home/behrooz/vosk-model-fa-0.42:/models/vosk/fa-0.42:ro
       - ./data:/data
     environment:
+      VOSK_FA_MODEL_PATH: /models/vosk/fa-0.42
       WHISPER_MODEL: tiny
       WHISPER_COMPUTE: int8
       WHISPER_DEVICE: cpu

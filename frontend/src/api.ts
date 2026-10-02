@@ -106,7 +106,7 @@ export function videoUrl(videoId: string): string {
   return `${API_BASE}/api/video/${videoId}`;
 }
 
-export type ExportFormat = "mp4" | "gif";
+export type ExportFormat = "mp4" | "gif" | "mkv";
 export type GifQuality = "low" | "medium" | "high";
 
 export type ExportResponse = {

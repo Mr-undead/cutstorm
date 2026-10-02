@@ -72,7 +72,6 @@ export function ExportPanel() {
           } else {
             const a = document.createElement("a");
             a.href = url;
-            a.download = `${videoId}.${format}`;
             document.body.appendChild(a);
             a.click();
             setTimeout(() => a.remove(), 500);
@@ -110,6 +109,7 @@ export function ExportPanel() {
               disabled={busy !== "idle"}>
               <option value="mp4">MP4</option>
               <option value="gif">GIF</option>
+              <option value="mkv">MKV</option>
             </select>
           </label>
           {format === "gif" && (
@@ -134,7 +134,6 @@ export function ExportPanel() {
             <div className="section-title">Downloads</div>
             {downloads.map((d) => (
               <a key={d.clipIndex} href={d.url}
-                download={`clip-${d.clipIndex.toString().padStart(2, "0")}.${d.format}`}
                 className="secondary"
                 style={{ display: "inline-block", textAlign: "center" }}>
                 Download Clip {d.clipIndex}

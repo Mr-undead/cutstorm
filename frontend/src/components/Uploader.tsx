@@ -8,6 +8,7 @@ const QUALITY = [
   { value: "large-v3", label: "Best (large-v3)" },
   { value: "small", label: "Fast (small)" },
   { value: "tiny", label: "Test (tiny)" },
+    { value: "vosk-fa-0.42", label: "Vosk Persian (fa-0.42)" },
 ];
 
 export function Uploader() {
