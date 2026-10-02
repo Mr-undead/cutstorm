@@ -112,6 +112,25 @@ def _sweep_orphans() -> dict:
         owned = _existing_video_ids()
         owned_meta = {p.stem for p in UPLOADS_DIR.glob("*.json") if _VIDEO_ID_RE.match(p.stem)}
 
+        # Build a set of valid base names for export files:
+        # - video_ids (legacy naming)
+        # - sanitized original_filenames (new naming with _export suffix)
+        valid_bases: set[str] = set(owned_meta)
+        for meta_file in UPLOADS_DIR.glob("*.json"):
+            if not _VIDEO_ID_RE.match(meta_file.stem):
+                continue
+            try:
+                data = json.loads(meta_file.read_text())
+                orig = data.get("original_filename")
+                if orig:
+                    base = Path(orig).stem
+                    base = "".join(c if c.isalnum() or c in "- _" else "_" for c in base)
+                    base = base.strip()
+                    if base:
+                        valid_bases.add(base)
+            except Exception:
+                pass
+
         # outputs/ — thumbnails, mp4, ass with dead owners
         for sprite in OUTPUTS_DIR.glob("thumbs_*.jpg"):
             # filename: thumbs_{video_id}_{count}_{width}.jpg
@@ -121,17 +140,36 @@ def _sweep_orphans() -> dict:
             if len(parts) >= 2 and parts[1] not in owned_meta:
                 sprite.unlink()
                 counts["thumbs"] += 1
+
+        # Helper to check if an export file stem matches a valid base
+        def _is_orphan_export(stem: str) -> bool:
+            # Check legacy: exact video_id or video_id_clip_N
+            if stem in valid_bases:
+                return False
+            if stem.startswith(tuple(b + "_clip_" for b in valid_bases)):
+                return False
+            # Check new: {base}_export or {base}_export_clip_N
+            for base in valid_bases:
+                if stem == f"{base}_export" or stem.startswith(f"{base}_export_clip_"):
+                    return False
+            return True
+
         for mp4 in OUTPUTS_DIR.glob("*.mp4"):
-            if _VIDEO_ID_RE.match(mp4.stem) and mp4.stem not in owned_meta:
+            if _is_orphan_export(mp4.stem):
                 mp4.unlink()
                 counts["outputs"] += 1
         for ass in OUTPUTS_DIR.glob("*.ass"):
+            # ASS files still use video_id naming
             if _VIDEO_ID_RE.match(ass.stem) and ass.stem not in owned_meta:
                 ass.unlink()
                 counts["ass"] += 1
         for gif in OUTPUTS_DIR.glob("*.gif"):
-            if _VIDEO_ID_RE.match(gif.stem) and gif.stem not in owned_meta:
+            if _is_orphan_export(gif.stem):
                 gif.unlink()
+                counts["outputs"] += 1
+        for mkv in OUTPUTS_DIR.glob("*.mkv"):
+            if _is_orphan_export(mkv.stem):
+                mkv.unlink()
                 counts["outputs"] += 1
 
         # uploads/url_cache/*.json
@@ -1112,16 +1150,18 @@ def delete_transcript(video_id: str, drop_video: bool = False) -> dict:
 
     meta = _meta_path(video_id)
     media = _find_media_file(video_id)
-    out = _output_path(video_id)
     ass = _ass_path(video_id)
 
-    # Read meta BEFORE unlinking it so we know which extra-audio to sweep.
+    # Read meta BEFORE unlinking it so we know which extra-audio to sweep
+    # and to get original_filename for export file cleanup.
     meta_data: dict = {}
     if meta.exists():
         try:
             meta_data = json.loads(meta.read_text())
         except Exception:
             meta_data = {}
+
+    original_filename = meta_data.get("original_filename")
 
     removed: list[str] = []
     if meta.exists():
@@ -1130,13 +1170,42 @@ def delete_transcript(video_id: str, drop_video: bool = False) -> dict:
     if drop_video and media is not None:
         media.unlink()
         removed.append("video")
-    if out.exists():
-        out.unlink()
-        removed.append("output")
-    gif = _gif_output_path(video_id)
-    if gif.exists():
-        gif.unlink()
-        removed.append("gif")
+
+    # Delete export files (mp4, mkv, gif) using both naming conventions:
+    # 1. New: {original_filename}_export{_clip_N}.{ext}
+    # 2. Legacy fallback: {video_id}{_clip_N}.{ext}
+    def _delete_export_files(base: str) -> None:
+        for ext in ("mp4", "mkv", "gif"):
+            # New naming: main export
+            p = OUTPUTS_DIR / f"{base}_export.{ext}"
+            if p.exists():
+                p.unlink()
+                removed.append(f"output_{ext}")
+            # New naming: clip variants
+            for clip_file in OUTPUTS_DIR.glob(f"{base}_export_clip_*.{ext}"):
+                clip_file.unlink()
+                removed.append(f"output_{ext}_clip")
+            # Legacy naming: main export (no _export suffix)
+            p_legacy = OUTPUTS_DIR / f"{base}.{ext}"
+            if p_legacy.exists():
+                p_legacy.unlink()
+                removed.append(f"output_{ext}_legacy")
+            # Legacy naming: clip variants
+            for clip_file in OUTPUTS_DIR.glob(f"{base}_clip_*.{ext}"):
+                clip_file.unlink()
+                removed.append(f"output_{ext}_legacy_clip")
+
+    if original_filename:
+        # Sanitize the same way _output_path does
+        base = Path(original_filename).stem
+        base = "".join(c if c.isalnum() or c in "- _" else "_" for c in base)
+        base = base.strip()
+        if base:
+            _delete_export_files(base)
+
+    # Legacy fallback: also clean up any files using video_id naming
+    _delete_export_files(video_id)
+
     if ass.exists():
         ass.unlink()
         removed.append("ass")
