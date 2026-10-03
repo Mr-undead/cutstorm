@@ -139,6 +139,7 @@ type State = {
   videoEl: HTMLMediaElement | null;
   trim: TrimConfig;
   trimRange: TrimRange;
+  draftTrimRange: TrimRange;
   clips: Clip[];
   activeClipId: string | null;
   audio: AudioConfig;
@@ -220,6 +221,7 @@ type Actions = {
   setVideoEl: (el: HTMLMediaElement | null) => void;
   setTrim: (patch: Partial<TrimConfig>) => void;
   setTrimRange: (patch: Partial<TrimRange>) => void;
+  setDraftTrimRange: (patch: Partial<TrimRange>) => void;
   addClip: () => void;
   updateClip: (id: string, patch: Partial<Clip>) => void;
   removeClip: (id: string) => void;
@@ -294,6 +296,7 @@ export const useStore = create<State & Actions>()(
       videoEl: null,
       trim: { enabled: false, threshold_sec: 0.4, padding_sec: 0.08 },
       trimRange: { in_sec: 0, out_sec: 0, loop: false },
+      draftTrimRange: { in_sec: 0, out_sec: 0, loop: false },
       clips: [],
       activeClipId: null,
       audio: {
@@ -393,6 +396,9 @@ export const useStore = create<State & Actions>()(
           trimRange: p?.trim_range
             ? { in_sec: p.trim_range.in_sec, out_sec: p.trim_range.out_sec, loop: !!p.trim_range.loop }
             : { in_sec: 0, out_sec: 0, loop: false },
+          draftTrimRange: p?.trim_range
+            ? { in_sec: p.trim_range.in_sec, out_sec: p.trim_range.out_sec, loop: !!p.trim_range.loop }
+            : { in_sec: 0, out_sec: 0, loop: false },
           audio: p?.audio
             ? {
                 sourceVolume: p.audio.source_volume,
@@ -476,7 +482,7 @@ export const useStore = create<State & Actions>()(
       setCurrentTime: (t) => set({ currentTime: t }),
       setVideoEl: (el) => set({ videoEl: el }),
       setTrim: (patch) => set((s) => ({ trim: { ...s.trim, ...patch } })),
-            setTrimRange: (patch) => set((s) => {
+      setTrimRange: (patch) => set((s) => {
         const dur = s.duration || 0;
         const next: TrimRange = { ...s.trimRange, ...patch };
 
@@ -490,31 +496,30 @@ export const useStore = create<State & Actions>()(
           );
         }
 
-        // Keep the selected clip synchronized with the active trim range.
-        if (s.activeClipId) {
-          const clips = s.clips.map((clip) =>
-            clip.id === s.activeClipId
-              ? {
-                  ...clip,
-                  in_sec: next.in_sec,
-                  out_sec: next.out_sec,
-                }
-              : clip
-          );
-
-          return {
-            trimRange: next,
-            clips,
-          };
-        }
-
         return { trimRange: next };
       }),
 
+      setDraftTrimRange: (patch) => set((s) => {
+        const dur = s.duration || 0;
+        const next: TrimRange = { ...s.draftTrimRange, ...patch };
+
+        // Clamp to [0, duration]. out_sec=0 stays as sentinel for "to end".
+        next.in_sec = Math.max(0, Math.min(next.in_sec, Math.max(0, dur - 0.1)));
+
+        if (next.out_sec > 0) {
+          next.out_sec = Math.max(
+            next.in_sec + 0.1,
+            Math.min(next.out_sec, dur)
+          );
+        }
+
+        return { draftTrimRange: next };
+      }),
+
       addClip: () => set((s) => {
-        const inSec = s.trimRange.in_sec;
-        const outSec = s.trimRange.out_sec > 0
-          ? s.trimRange.out_sec
+        const inSec = s.draftTrimRange.in_sec;
+        const outSec = s.draftTrimRange.out_sec > 0
+          ? s.draftTrimRange.out_sec
           : s.duration;
 
         if (outSec <= inSec) {
@@ -576,6 +581,11 @@ export const useStore = create<State & Actions>()(
               out_sec: 0,
               loop: false,
             },
+            draftTrimRange: {
+              in_sec: 0,
+              out_sec: 0,
+              loop: false,
+            },
           };
         }
 
@@ -586,6 +596,11 @@ export const useStore = create<State & Actions>()(
           activeClipId: nextClip.id,
           trimRange: {
             ...s.trimRange,
+            in_sec: nextClip.in_sec,
+            out_sec: nextClip.out_sec,
+          },
+          draftTrimRange: {
+            ...s.draftTrimRange,
             in_sec: nextClip.in_sec,
             out_sec: nextClip.out_sec,
           },
@@ -603,6 +618,11 @@ export const useStore = create<State & Actions>()(
           activeClipId: id,
           trimRange: {
             ...s.trimRange,
+            in_sec: clip.in_sec,
+            out_sec: clip.out_sec,
+          },
+          draftTrimRange: {
+            ...s.draftTrimRange,
             in_sec: clip.in_sec,
             out_sec: clip.out_sec,
           },
@@ -798,6 +818,7 @@ export const useStore = create<State & Actions>()(
           exportJobId: null,
           watermark: true,
           trimRange: { in_sec: 0, out_sec: 0, loop: false },
+          draftTrimRange: { in_sec: 0, out_sec: 0, loop: false },
           socialPreset: "none" as SocialPreset,
           reelsGuide: false,
           clips: [],
@@ -842,9 +863,9 @@ export const useStore = create<State & Actions>()(
         size: s.size,
         trim: s.trim,
         trimRange: s.trimRange,
-	clips: s.clips,
-	activeClipId: s.activeClipId,
-	audio: s.audio,
+        clips: s.clips,
+        activeClipId: s.activeClipId,
+        audio: s.audio,
         canvas: s.canvas,
         socialPreset: s.socialPreset,
         reelsGuide: s.reelsGuide,
@@ -854,14 +875,14 @@ export const useStore = create<State & Actions>()(
         watermark: s.watermark,
         subsStreaming: s.subsStreaming,
         jobId: s.jobId,
-        // `exportJobId` is deliberately NOT persisted: it points at a job on a
-        // server that this browser can no longer cancel after a reload.
+        exportJobId: s.exportJobId,
       }),
-        version: 10,
+        version: 11,
         // Historical fields migrate forward:
         //   v1→v2: `canvas` gained mode/crop_anchor/custom (Feature 1).
         //   v2→v3: `trimRange` added (Feature Trim in/out).
         //   v3→v4: `audio` added (Feature Volume + extra track).
+        //   v10→v11: `draftTrimRange` added (separate draft range for slider).
         // zustand's default merge is shallow — persisted fields REPLACE the
         // defaults — so missing keys must be filled explicitly to avoid
         // undefined reads in the UI.
@@ -939,6 +960,17 @@ export const useStore = create<State & Actions>()(
             // and the guide stays off. Never overwrite an existing value.
             p.socialPreset = p.socialPreset ?? "none";
             p.reelsGuide = p.reelsGuide ?? false;
+          }
+
+          if (version < 11) {
+            // v10→v11: draftTrimRange added (separate draft range for slider).
+            // Initialize from trimRange if present, else defaults.
+            const tr = (p.trimRange as Record<string, unknown> | undefined) ?? {};
+            p.draftTrimRange = {
+              in_sec: typeof tr.in_sec === "number" ? tr.in_sec : 0,
+              out_sec: typeof tr.out_sec === "number" ? tr.out_sec : 0,
+              loop: typeof tr.loop === "boolean" ? tr.loop : false,
+            };
           }
           return p;
         },

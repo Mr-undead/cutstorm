@@ -37,17 +37,17 @@ export function useHotkeys(): void {
 
       if (editing) return;
 
-      const { playPause, nudge, splitAtCurrent, deleteCurrent, setTrimRange } = useStore.getState();
+      const { playPause, nudge, splitAtCurrent, deleteCurrent, setDraftTrimRange } = useStore.getState();
       switch (e.key) {
         case "i":
         case "I":
           e.preventDefault();
-          setTrimRange({ in_sec: useStore.getState().currentTime });
+          setDraftTrimRange({ in_sec: useStore.getState().currentTime });
           return;
         case "o":
         case "O":
           e.preventDefault();
-          setTrimRange({ out_sec: useStore.getState().currentTime });
+          setDraftTrimRange({ out_sec: useStore.getState().currentTime });
           return;
         case " ":
           if (onVideo) return;  // let native video controls toggle play

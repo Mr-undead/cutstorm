@@ -46,16 +46,15 @@ function parseTime(value: string): number | null {
 }
 
 const THUMB_COUNT = 40;
-const THUMB_WIDTH = 160;
 
 export function Timeline() {
   const duration = useStore((s) => s.duration);
   const videoUrl = useStore((s) => s.videoUrl);
   const videoId = useStore((s) => s.videoId);
-  const isAudioOnly = useStore((s) => s.isAudioOnly);
   const currentTime = useStore((s) => s.currentTime);
   const trimRange = useStore((s) => s.trimRange);
-  const setTrimRange = useStore((s) => s.setTrimRange);
+  const draftTrimRange = useStore((s) => s.draftTrimRange);
+  const setDraftTrimRange = useStore((s) => s.setDraftTrimRange);
   const clips = useStore((s) => s.clips);
   const activeClipId = useStore((s) => s.activeClipId);
   const addClip = useStore((s) => s.addClip);
@@ -68,12 +67,11 @@ export function Timeline() {
 
   if (!videoUrl || !duration) return null;
 
-  const outSec = trimRange.out_sec > 0 ? trimRange.out_sec : duration;
-  const inSec = trimRange.in_sec;
+  const outSec = draftTrimRange.out_sec > 0 ? draftTrimRange.out_sec : duration;
+  const inSec = draftTrimRange.in_sec;
   const kept = Math.max(0, outSec - inSec);
-  const thumbsUrl = videoId && !isAudioOnly
-    ? `/api/thumbnails/${videoId}?count=${THUMB_COUNT}&width=${THUMB_WIDTH}`
-    : null;
+
+  // For loop feature and export, use trimRange (active clip)
   const loopArmed = !!trimRange.loop;
   const loopActive = loopArmed && audio.extraAudioId !== null && audio.extraAudioDuration > 0;
 
@@ -84,17 +82,17 @@ export function Timeline() {
         inSec={inSec}
         outSec={outSec}
         currentTime={currentTime}
-        outStored={trimRange.out_sec}
-        thumbsUrl={thumbsUrl}
+        outStored={draftTrimRange.out_sec}
+        thumbsUrl={null}
         thumbCount={THUMB_COUNT}
-        onChange={(patch) => setTrimRange(patch)}
+        onChange={(patch) => setDraftTrimRange(patch)}
       />
 
      <TrimTimeInputs
        duration={duration}
        inSec={inSec}
        outSec={outSec}
-       onChange={(patch) => setTrimRange(patch)}
+       onChange={(patch) => setDraftTrimRange(patch)}
       />
 
             <div className="clips-panel" data-testid="clips-panel">

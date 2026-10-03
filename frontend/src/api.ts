@@ -169,6 +169,9 @@ export async function exportVideo(args: {
   watermark?: boolean;
   clipIndex?: number;
   subtitleTrack?: "source" | "extra";
+  resolution?: string;
+  fps?: number;
+  optimizeForInstagram?: boolean;
   /** Aborted by `cancelExport` when the user presses Stop. */
   signal?: AbortSignal;
 }): Promise<ExportResponse> {
@@ -205,6 +208,9 @@ export async function exportVideo(args: {
       watermark: args.watermark !== false,
       clip_index: args.clipIndex ?? null,
       subtitle_track: args.subtitleTrack ?? "source",
+      resolution: args.resolution ?? "1080p",
+      fps: args.fps ?? 30,
+      optimize_for_instagram: args.optimizeForInstagram ?? true,
     }),
     signal: args.signal,
   });
