@@ -12,6 +12,39 @@ PRESET_TARGETS: dict[str, tuple[int, int]] = {
     "4:5":  (1080, 1350),
 }
 
+# Resolution mapping: maps resolution strings to height values
+# Width is calculated based on aspect ratio
+RESOLUTION_HEIGHTS: dict[str, int] = {
+    "720p": 720,
+    "1080p": 1080,
+    "4k": 2160,
+}
+
+
+def _get_target_dimensions(preset: str, resolution: str | None) -> tuple[int, int]:
+    """Get target width/height for a preset and resolution.
+    
+    The base PRESET_TARGETS uses 1080p as the reference height for vertical
+    presets and 1920 for horizontal. We scale from there based on the
+    requested resolution.
+    """
+    base_w, base_h = PRESET_TARGETS.get(preset, (1080, 1920))
+    
+    if resolution is None:
+        return base_w, base_h
+    
+    target_height = RESOLUTION_HEIGHTS.get(resolution.lower(), 1080)
+    
+    # Calculate width maintaining aspect ratio
+    aspect_ratio = base_w / base_h
+    target_width = int(round(target_height * aspect_ratio))
+    
+    # Ensure even dimensions (required by libx264)
+    target_width = target_width if target_width % 2 == 0 else target_width + 1
+    target_height = target_height if target_height % 2 == 0 else target_height + 1
+    
+    return target_width, target_height
+
 
 @dataclass
 class ResolvedCanvas:
@@ -35,26 +68,49 @@ def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
 
 
-def resolve(canvas: Canvas, source_w: int, source_h: int) -> ResolvedCanvas:
+def resolve(canvas: Canvas, source_w: int, source_h: int, resolution: str | None = None) -> ResolvedCanvas:
     if canvas.mode == "custom":
-        return _resolve_custom(canvas, source_w, source_h)
-    return _resolve_preset(canvas, source_w, source_h)
+        return _resolve_custom(canvas, source_w, source_h, resolution)
+    return _resolve_preset(canvas, source_w, source_h, resolution)
 
 
-def _resolve_preset(canvas: Canvas, source_w: int, source_h: int) -> ResolvedCanvas:
+def _resolve_preset(canvas: Canvas, source_w: int, source_h: int, resolution: str | None = None) -> ResolvedCanvas:
     bg = canvas.bg_color
 
     if canvas.preset == "source":
         if source_w <= 0 or source_h <= 0:
-            tw, th = PRESET_TARGETS["9:16"]
+            tw, th = _get_target_dimensions("9:16", resolution)
             return ResolvedCanvas(target_w=tw, target_h=th, ffmpeg_filter="", bg_color_hex=bg)
+        
+        # If no resolution specified, use source dimensions (no-op)
+        if resolution is None:
+            return ResolvedCanvas(
+                target_w=_even(source_w, 2), target_h=_even(source_h, 2),
+                ffmpeg_filter="",
+                bg_color_hex=bg,
+            )
+        
+        # Resolution specified: scale to requested resolution while preserving source aspect ratio
+        target_height = RESOLUTION_HEIGHTS.get(resolution.lower(), 1080)
+        target_width = _even(int(round(source_w * target_height / source_h)), 2)
+        target_height = _even(target_height, 2)
+        
+        # If dimensions match source exactly, no filter needed
+        if (target_width, target_height) == (_even(source_w, 2), _even(source_h, 2)):
+            return ResolvedCanvas(
+                target_w=target_width, target_h=target_height,
+                ffmpeg_filter="",
+                bg_color_hex=bg,
+            )
+        
+        # Otherwise apply scale filter
         return ResolvedCanvas(
-            target_w=_even(source_w, 2), target_h=_even(source_h, 2),
-            ffmpeg_filter="",
+            target_w=target_width, target_h=target_height,
+            ffmpeg_filter=f"scale={target_width}:{target_height}",
             bg_color_hex=bg,
         )
 
-    target_w, target_h = PRESET_TARGETS[canvas.preset]
+    target_w, target_h = _get_target_dimensions(canvas.preset, resolution)
 
     # Audio-only (no source): renderer pipeline builds video from scratch.
     if source_w <= 0 or source_h <= 0:
@@ -110,11 +166,11 @@ def _resolve_preset(canvas: Canvas, source_w: int, source_h: int) -> ResolvedCan
     )
 
 
-def _resolve_custom(canvas: Canvas, source_w: int, source_h: int) -> ResolvedCanvas:
+def _resolve_custom(canvas: Canvas, source_w: int, source_h: int, resolution: str | None = None) -> ResolvedCanvas:
     bg = canvas.bg_color
     if source_w <= 0 or source_h <= 0:
         # Custom crop requires a source.
-        tw, th = PRESET_TARGETS["9:16"]
+        tw, th = _get_target_dimensions("9:16", resolution)
         return ResolvedCanvas(tw, th, "", bg)
 
     c = canvas.custom

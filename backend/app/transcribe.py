@@ -17,15 +17,29 @@ class ProbeInfo:
     duration: float
     width: int
     height: int
+    fps: float | None = None
     is_audio_only: bool = False
     has_audio: bool = True
+
+def _parse_frame_rate(rate_str: str | None) -> float | None:
+    """Parse ffprobe frame rate string like '30000/1001' to float."""
+    if not rate_str or rate_str == "0/0":
+        return None
+    try:
+        num, den = rate_str.split("/")
+        if int(den) == 0:
+            return None
+        return float(num) / float(den)
+    except (ValueError, ZeroDivisionError):
+        return None
+
 
 def probe(video: Path) -> ProbeInfo:
     out = subprocess.run(
         [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "stream=codec_type,width,height:format=duration",
+            "-show_entries", "stream=codec_type,width,height,r_frame_rate:format=duration",
             "-of", "json",
             str(video),
         ],
@@ -43,10 +57,12 @@ def probe(video: Path) -> ProbeInfo:
         if aud is None:
             raise RuntimeError(f"no media streams in {video}")
         return ProbeInfo(duration=duration, width=0, height=0, is_audio_only=True, has_audio=True)
+    fps = _parse_frame_rate(vid.get("r_frame_rate"))
     return ProbeInfo(
         duration=duration,
         width=int(vid.get("width", 0)),
         height=int(vid.get("height", 0)),
+        fps=fps,
         is_audio_only=False,
         has_audio=aud is not None,
     )

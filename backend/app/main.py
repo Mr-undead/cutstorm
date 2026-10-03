@@ -1731,7 +1731,7 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
         canvas_cfg = req.canvas
         if info.is_audio_only and canvas_cfg.preset == "source":
             canvas_cfg = canvas_cfg.model_copy(update={"preset": "9:16"})
-        resolved = canvas_mod.resolve(canvas_cfg, info.width, info.height)
+        resolved = canvas_mod.resolve(canvas_cfg, info.width, info.height, req.resolution)
 
         # ---- trim in/out edges ----
         trim_in = max(0.0, float(req.trim.in_sec))
@@ -1877,6 +1877,17 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
 
         def do_render() -> None:
             if not has_overlay and not info.is_audio_only:
+                # Check if requested resolution matches source video's native resolution
+                requested_resolution = (req.resolution or "1080p").lower()
+                target_height = canvas_mod.RESOLUTION_HEIGHTS.get(requested_resolution, 1080)
+                resolution_matches = (info.height == target_height)
+                
+                # Check if requested fps matches source video's native fps
+                fps_matches = False
+                if info.fps is not None:
+                    # Allow small difference due to float precision (e.g., 29.97 vs 30)
+                    fps_matches = abs(req.fps - info.fps) < 1.0
+                
                 if (
                     not canvas_transform
                     and not trim_active
@@ -1884,6 +1895,8 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
                     and not audio_mix_active
                     and not wm_active
                     and not loop_active
+                    and resolution_matches
+                    and fps_matches
                 ):
                     log.info("export.path stream_copy")
                     try:
@@ -1913,6 +1926,8 @@ async def _run_export_worker(jid: str, req: ExportRequest, cancel_key: str):
                     watermark_path=watermark_path,
                     source_has_audio=info.has_audio,
                     loop_total_duration=loop_total_duration,
+                    fps=req.fps,
+                    resolution=req.resolution,
                     cancel_key=cancel_key,
                 )
                 return
@@ -2095,26 +2110,34 @@ def api_download(
 
         # Fallback: construct path from video_id and clip_index
         # Use format query param to determine file type
+        # Read original_filename from meta.json to use the correct naming convention
+        original_filename = None
+        meta_path = _meta_path(video_id)
+        if meta_path.exists():
+            try:
+                meta_data = json.loads(meta_path.read_text())
+                original_filename = meta_data.get("original_filename")
+            except Exception:
+                pass
+
         if format == "gif":
-            out = _gif_output_path(video_id, clip_index)
+            out = _output_path(video_id, clip_index, "gif", original_filename)
             media_type = "image/gif"
             ext = "gif"
         elif format == "mkv":
-            out = _output_path(video_id, clip_index, "mkv")
+            out = _output_path(video_id, clip_index, "mkv", original_filename)
             media_type = "video/x-matroska"
             ext = "mkv"
         else:
-            out = _output_path(video_id, clip_index)
+            out = _output_path(video_id, clip_index, "mp4", original_filename)
             media_type = "video/mp4"
             ext = "mp4"
 
         if not out.exists():
             raise HTTPException(status_code=404, detail="output not found")
 
-        if clip_index is None:
-            filename = f"{video_id}.{ext}"
-        else:
-            filename = f"clip-{clip_index:02d}.{ext}"
+        # Use the actual filename from the output path (includes _export suffix)
+        filename = out.name
 
         return FileResponse(
             out,
@@ -2126,26 +2149,34 @@ def api_download(
     _validate_video_id(identifier)
     video_id = identifier
 
+    # Read original_filename from meta.json to use the correct naming convention
+    original_filename = None
+    meta_path = _meta_path(video_id)
+    if meta_path.exists():
+        try:
+            meta_data = json.loads(meta_path.read_text())
+            original_filename = meta_data.get("original_filename")
+        except Exception:
+            pass
+
     if format == "gif":
-        out = _gif_output_path(video_id, clip_index)
+        out = _output_path(video_id, clip_index, "gif", original_filename)
         media_type = "image/gif"
         ext = "gif"
     elif format == "mkv":
-        out = _output_path(video_id, clip_index, "mkv")
+        out = _output_path(video_id, clip_index, "mkv", original_filename)
         media_type = "video/x-matroska"
         ext = "mkv"
     else:
-        out = _output_path(video_id, clip_index)
+        out = _output_path(video_id, clip_index, "mp4", original_filename)
         media_type = "video/mp4"
         ext = "mp4"
 
     if not out.exists():
         raise HTTPException(status_code=404, detail="output not found")
 
-    if clip_index is None:
-        filename = f"{video_id}.{ext}"
-    else:
-        filename = f"clip-{clip_index:02d}.{ext}"
+    # Use the actual filename from the output path (includes _export suffix)
+    filename = out.name
 
     return FileResponse(
         out,

@@ -41,6 +41,20 @@ def _get_duration(source: Path) -> float:
     return 0.0
 
 
+def _get_bitrate_params(resolution: str | None, fps: int) -> dict:
+    """Return CRF / maxrate / bufsize for libx264 based on output resolution and FPS."""
+    res = (resolution or "1080p").lower()
+    if res in ("720p", "720"):
+        return {"crf": 18, "maxrate": "8M", "bufsize": "12M"}
+    if res in ("1080p", "1080"):
+        if fps >= 60:
+            return {"crf": 18, "maxrate": "20M", "bufsize": "30M"}
+        return {"crf": 18, "maxrate": "14M", "bufsize": "20M"}
+    if res in ("4k", "2160p", "2160"):
+        return {"crf": 18, "maxrate": "45M", "bufsize": "60M"}
+    # Fallback: treat unknown as 1080p @ 30fps
+    return {"crf": 18, "maxrate": "14M", "bufsize": "20M"}
+
 def run_stream_copy(
     source: Path,
     out: Path,
@@ -79,6 +93,7 @@ def run_filter_only(
     source_has_audio: bool = True,
     loop_total_duration: float | None = None,
     fps: int = 30,
+    resolution: str | None = None,
     cancel_key: str | None = None,
 ) -> None:
     """Case B: canvas transform and/or trim, but no subtitle overlay.
@@ -208,13 +223,17 @@ def run_filter_only(
     if has_watermark:
         # Single PNG, loop so overlay persists for the whole clip.
         cmd += ["-loop", "1", "-i", str(watermark_path)]
+    br = _get_bitrate_params(resolution, fps)
     cmd += [
         "-filter_complex", filter_complex,
         "-map", "[v]", *audio_map,
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-preset", "slow",
-        "-crf", "16",
+        "-crf", str(br["crf"]),
+        "-maxrate", br["maxrate"],
+        "-bufsize", br["bufsize"],
+        "-r", str(fps),
     ]
     # -shortest stops encoding when the shortest input ends; otherwise the
     # looped watermark PNG (or aloop'd source) would extend the video
