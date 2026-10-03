@@ -72,7 +72,7 @@ def dirs(tmp_path, monkeypatch):
 def client(dirs, monkeypatch):
     monkeypatch.setattr(
         "app.main.probe",
-        lambda path: ProbeInfo(duration=5.0, width=1280, height=720, is_audio_only=False),
+        lambda path: ProbeInfo(duration=5.0, width=1280, height=720, fps=30.0, is_audio_only=False),
     )
     return TestClient(app)
 
@@ -244,7 +244,7 @@ def test_stream_copy_cancel_returns_499_and_removes_output(client, monkeypatch) 
     monkeypatch.setattr("app.simple_export.run_stream_copy", stream_copy_spy)
     monkeypatch.setattr("app.simple_export.run_filter_only", filter_only_spy)
 
-    r = _post_export(client)
+    r = _post_export(client, resolution="720p", fps=30)
 
     assert r.status_code == 499, r.text
     assert r.json()["detail"] == "export cancelled"
@@ -299,7 +299,7 @@ def test_gif_cancel_returns_499(client, monkeypatch) -> None:
     monkeypatch.setattr("app.simple_export.run_stream_copy", stream_copy_spy)
     monkeypatch.setattr(app_main, "_encode_gif", encode_gif_spy)
 
-    r = _post_export(client, format="gif", gif_quality="low")
+    r = _post_export(client, format="gif", gif_quality="low", resolution="720p", fps=30)
 
     assert r.status_code == 499, r.text
     assert not _output_mp4().exists()
@@ -318,7 +318,7 @@ def test_real_ffmpeg_failure_still_reports_500(client, monkeypatch) -> None:
     monkeypatch.setattr("app.simple_export.run_stream_copy", fail_spy)
     monkeypatch.setattr("app.simple_export.run_filter_only", fail_spy)
 
-    r = _post_export(client)
+    r = _post_export(client, resolution="720p", fps=30)
 
     assert r.status_code == 500, r.text
     assert "export failed" in r.json()["detail"]
@@ -335,7 +335,7 @@ def test_export_succeeds_and_clears_flag(client, monkeypatch) -> None:
 
     monkeypatch.setattr("app.simple_export.run_stream_copy", stream_copy_spy)
 
-    r = _post_export(client)
+    r = _post_export(client, resolution="720p", fps=30)
 
     assert r.status_code == 200, r.text
     assert _output_mp4().exists()

@@ -52,7 +52,7 @@ def client(monkeypatch):
         if name.startswith(AUDIO_ID):
             return ProbeInfo(duration=5.0, width=0, height=0, is_audio_only=True)
         # Default 1280x720 for video
-        return ProbeInfo(duration=5.0, width=1280, height=720, is_audio_only=False)
+        return ProbeInfo(duration=5.0, width=1280, height=720, fps=30.0, is_audio_only=False)
 
     # Patch probe everywhere it's imported.
     monkeypatch.setattr("app.main.probe", fake_probe)
@@ -89,7 +89,8 @@ def spies(monkeypatch):
 
 def _post_export(client: TestClient, *, video_id: str, canvas: dict,
                   segments: list[dict] | None = None, trim: bool = False,
-                  watermark: bool = False) -> dict:
+                  watermark: bool = False, resolution: str | None = None,
+                  fps: int | None = None) -> dict:
     body = {
         "video_id": video_id,
         "segments": segments or [],
@@ -104,6 +105,10 @@ def _post_export(client: TestClient, *, video_id: str, canvas: dict,
         # filter_only so keep it off here unless a specific test asks.
         "watermark": watermark,
     }
+    if resolution is not None:
+        body["resolution"] = resolution
+    if fps is not None:
+        body["fps"] = fps
     r = client.post("/api/export", json=body)
     assert r.status_code == 200, r.text
     return r.json()
@@ -119,6 +124,7 @@ def test_case_a_stream_copy_when_noop(client, spies):
             canvas={"mode": "preset", "preset": "source", "crop_anchor": "center",
                     "custom": {"x_pct": 0, "y_pct": 0, "w_pct": 100, "h_pct": 100},
                     "bg_color": "#000000"},
+            resolution="720p",
         )
         assert "stream_copy" in spies
         assert "filter_only" not in spies
@@ -220,6 +226,7 @@ def test_blank_text_segments_treated_as_no_overlay(client, spies):
                     "custom": {"x_pct": 0, "y_pct": 0, "w_pct": 100, "h_pct": 100},
                     "bg_color": "#000000"},
             segments=segs,
+            resolution="720p",
         )
         assert "stream_copy" in spies  # whitespace-only segments → no overlay → Case A
         assert "render" not in spies
